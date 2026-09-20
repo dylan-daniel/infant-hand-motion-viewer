@@ -43,7 +43,9 @@ fn default_camera_distance() -> f32 {
     7.0
 }
 
-/// Persistent user settings, stored as JSON next to the executable.
+const CONFIG_DIR_NAME: &str = ".infant-hand-motion-viewer";
+
+/// Persistent user settings, stored as JSON in `~/.infant-hand-motion-viewer/config.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -156,19 +158,30 @@ impl Config {
         Self::default()
     }
 
-    /// Write config back to the specified path as pretty JSON.
+    /// Write config back to the specified path as pretty JSON, creating parent directories as needed.
     pub fn save<P: AsRef<Path>>(&self, path: P) -> std::io::Result<()> {
+        let path = path.as_ref();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
         let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
         fs::write(path, json)
     }
 
-    /// Absolute path of the config file next to the running executable.
+    /// Directory holding user settings: `~/.infant-hand-motion-viewer` on Linux, macOS, and Windows.
+    pub fn config_dir() -> Option<PathBuf> {
+        let home = if cfg!(windows) {
+            std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))
+        } else {
+            std::env::var_os("HOME")
+        }?;
+        Some(PathBuf::from(home).join(CONFIG_DIR_NAME))
+    }
+
+    /// Absolute path of the config file inside the per-user config directory.
     pub fn default_config_path() -> PathBuf {
-        if let Ok(exe_path) = std::env::current_exe()
-            && let Some(parent) = exe_path.parent()
-        {
-            return parent.join("config.json");
-        }
-        PathBuf::from("config.json")
+        Self::config_dir()
+            .unwrap_or_else(|| PathBuf::from(CONFIG_DIR_NAME))
+            .join("config.json")
     }
 }
