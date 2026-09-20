@@ -446,15 +446,17 @@ impl FileExplorer {
             self.live_open.clear();
 
             if let Some(node) = self.root_node.clone() {
-                Self::draw_node(
-                    ui,
-                    &node,
+                let mut draw = TreeDraw {
                     icons,
                     is_remote,
-                    &mut result,
-                    &mut self.live_open,
-                    &self.saved_open,
-                );
+                    result: &mut result,
+                    live_open: &mut self.live_open,
+                    saved_open: &self.saved_open,
+                    row_left: ui.cursor_screen_pos()[0],
+                    row_width: ui.content_region_avail()[0],
+                    row_index: 0,
+                };
+                Self::draw_node(ui, &node, &mut draw);
             } else {
                 ui.text_colored(
                     [0.6, 0.6, 0.6, 1.0],
@@ -466,15 +468,25 @@ impl FileExplorer {
         result
     }
 
-    fn draw_node(
-        ui: &Ui,
-        node: &ExplorerNode,
-        icons: &UiIcons,
-        is_remote: bool,
-        result: &mut ExplorerResult,
-        live_open: &mut HashSet<String>,
-        saved_open: &HashSet<String>,
-    ) {
+    /// Paint the alternating row background behind the row about to be drawn, spanning the full content width.
+    fn stripe_row(ui: &Ui, draw: &mut TreeDraw) {
+        if draw.row_index % 2 == 1 {
+            let row_top = ui.cursor_screen_pos()[1];
+            let row_pitch = ui.text_line_height_with_spacing();
+            ui.get_window_draw_list()
+                .add_rect(
+                    [draw.row_left, row_top],
+                    [draw.row_left + draw.row_width, row_top + row_pitch],
+                    ui.style_color(StyleColor::TableRowBgAlt),
+                )
+                .filled(true)
+                .build();
+        }
+        draw.row_index += 1;
+    }
+
+    fn draw_node(ui: &Ui, node: &ExplorerNode, draw: &mut TreeDraw) {
+        Self::stripe_row(ui, draw);
         let node_left = ui.cursor_screen_pos()[0];
 
         if node.is_file {
@@ -487,14 +499,14 @@ impl FileExplorer {
                 .open_on_double_click(true)
                 .span_full_width(true)
                 .push();
-            Self::draw_node_label(ui, icons.file_hexport, &node.name, node_left);
+            Self::draw_node_label(ui, draw.icons.file_hexport, &node.name, node_left);
 
             if node_token.is_some() && ui.is_item_clicked() {
-                result.open_file = Some(node.path.clone());
-                result.is_remote = is_remote;
+                draw.result.open_file = Some(node.path.clone());
+                draw.result.is_remote = draw.is_remote;
             }
         } else {
-            let should_open = node.default_open || saved_open.contains(&node.path);
+            let should_open = node.default_open || draw.saved_open.contains(&node.path);
 
             let node_token = ui
                 .tree_node_config(&node.path)
@@ -505,13 +517,17 @@ impl FileExplorer {
                 .span_full_width(true)
                 .push();
             let open = node_token.is_some();
-            let icon = if open { icons.folder_open } else { icons.folder_closed };
+            let icon = if open {
+                draw.icons.folder_open
+            } else {
+                draw.icons.folder_closed
+            };
             Self::draw_node_label(ui, icon, &node.name, node_left);
 
             if open {
-                live_open.insert(node.path.clone());
+                draw.live_open.insert(node.path.clone());
                 for child in &node.children {
-                    Self::draw_node(ui, child, icons, is_remote, result, live_open, saved_open);
+                    Self::draw_node(ui, child, draw);
                 }
             }
         }
@@ -544,6 +560,18 @@ impl FileExplorer {
             name,
         );
     }
+}
+
+/// State shared by every node in one frame's tree walk.
+struct TreeDraw<'a> {
+    icons: &'a UiIcons,
+    is_remote: bool,
+    result: &'a mut ExplorerResult,
+    live_open: &'a mut HashSet<String>,
+    saved_open: &'a HashSet<String>,
+    row_left: f32,
+    row_width: f32,
+    row_index: usize,
 }
 
 impl Default for FileExplorer {
