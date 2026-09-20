@@ -1,16 +1,66 @@
-use dear_imgui_rs::Ui;
+use dear_imgui_rs::{Condition, Key, Ui, WindowFlags, sys};
 
 use crate::remote::{CacheManager, ConnectionState, RemoteClient, RemoteConfig};
 
-/// Draw the centered modal dialog for SSH / remote daemon configuration.
-pub fn draw_remote_modal(ui: &Ui, is_open: &mut bool, config: &mut RemoteConfig, client: &RemoteClient) {
+const MODAL_WIDTH: f32 = 540.0;
+
+/// Center the next modal on the main viewport at a fixed width that auto-fits its height.
+fn setup_modal_window(ui: &Ui) {
+    let center = ui.main_viewport().center();
+    unsafe {
+        sys::igSetNextWindowPos(
+            sys::ImVec2 {
+                x: center[0],
+                y: center[1],
+            },
+            Condition::Appearing as i32,
+            sys::ImVec2 { x: 0.5, y: 0.5 },
+        );
+        sys::igSetNextWindowSize(sys::ImVec2 { x: MODAL_WIDTH, y: 0.0 }, Condition::Always as i32);
+        sys::igSetNextWindowSizeConstraints(
+            sys::ImVec2 { x: MODAL_WIDTH, y: 0.0 },
+            sys::ImVec2 {
+                x: MODAL_WIDTH,
+                y: 2000.0,
+            },
+            None,
+            std::ptr::null_mut(),
+        );
+    }
+}
+
+/// Open and draw a fixed, non-movable modal; `body` returns true when it wants the modal closed.
+fn draw_modal(ui: &Ui, name: &str, is_open: &mut bool, body: impl FnOnce() -> bool) {
     if !*is_open {
         return;
     }
+    if !ui.is_popup_open(name) {
+        ui.open_popup(name);
+    }
+    setup_modal_window(ui);
 
-    ui.open_popup("Connect to Remote Server");
+    let mut close = false;
+    let token = ui
+        .begin_modal_popup_config(name)
+        .opened(is_open)
+        .flags(WindowFlags::ALWAYS_AUTO_RESIZE | WindowFlags::NO_SAVED_SETTINGS | WindowFlags::NO_MOVE)
+        .begin();
+    if token.is_some() {
+        close = body() || ui.is_key_pressed(Key::Escape);
+        if close {
+            ui.close_current_popup();
+        }
+    }
+    drop(token);
+    if close {
+        *is_open = false;
+    }
+}
 
-    ui.modal_popup_with_opened("Connect to Remote Server", is_open, || {
+/// Draw the centered modal dialog for SSH / remote daemon configuration.
+pub fn draw_remote_modal(ui: &Ui, is_open: &mut bool, config: &mut RemoteConfig, client: &RemoteClient) {
+    draw_modal(ui, "Connect to Remote Server", is_open, || {
+        let mut close = false;
         ui.text("Remote SSH Daemon Connection");
         ui.separator();
 
@@ -51,24 +101,19 @@ pub fn draw_remote_modal(ui: &Ui, is_open: &mut bool, config: &mut RemoteConfig,
         ui.same_line();
         if ui.button("Connect") {
             client.connect_async(config.clone());
-            ui.close_current_popup();
+            close = true;
         }
         ui.same_line();
         if ui.button("Cancel") {
-            ui.close_current_popup();
+            close = true;
         }
+        close
     });
 }
 
 /// Draw the centered modal dialog for local disk storage and cache configuration.
 pub fn draw_storage_modal(ui: &Ui, is_open: &mut bool, cache_folder: &mut String, browse_requested: &mut bool) {
-    if !*is_open {
-        return;
-    }
-
-    ui.open_popup("Storage & Cache Settings");
-
-    ui.modal_popup_with_opened("Storage & Cache Settings", is_open, || {
+    draw_modal(ui, "Storage & Cache Settings", is_open, || {
         ui.text("Local File & Cache Management");
         ui.separator();
 
@@ -96,8 +141,6 @@ pub fn draw_storage_modal(ui: &Ui, is_open: &mut bool, cache_folder: &mut String
 
         ui.separator();
 
-        if ui.button("Close") {
-            ui.close_current_popup();
-        }
+        ui.button("Close")
     });
 }
