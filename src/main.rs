@@ -1,3 +1,1150 @@
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
+
+use winit::application::ApplicationHandler;
+use winit::dpi::LogicalSize;
+use winit::event::{DeviceEvent, DeviceId, ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::window::{Fullscreen, Window, WindowId};
+
+use dear_imgui_rs::{
+    ConfigFlags, Context as ImGuiContext, DockLayout, DockLayoutApply, DockNodeFlags, DockSplit, TextureId, WindowKey,
+};
+use dear_imgui_wgpu::{ExternalTextureId, FramebufferExtent, GammaMode, WgpuInitInfo, WgpuRenderer, wgpu};
+use dear_imgui_winit::{HiDpiMode, WinitPlatform};
+
+use infant_hand_motion_viewer::assets;
+use infant_hand_motion_viewer::config::Config;
+use infant_hand_motion_viewer::data::{MeshSequence, Transform, compute_transform, reference_depth};
+use infant_hand_motion_viewer::graphics::{
+    Camera, FrameGpu, Framebuffer, FreeCamera, Gpu, ImageTexture, OrbitCamera, Renderer, SceneRender, prepare_frame,
+};
+use infant_hand_motion_viewer::remote::{CacheManager, RemoteClient, RemoteConfig, ScrubWorker};
+use infant_hand_motion_viewer::ui::{
+    FileExplorer, MenuState, SourceMode, Transport, UiIcons, draw_flags_window, draw_image_window, draw_menu_bar,
+    draw_remote_modal, draw_storage_modal, draw_viewport_window,
+};
+use infant_hand_motion_viewer::util::WorkerQueue;
+
+const PLAYBACK_FPS: f64 = 30.0;
+const SCRUB_INITIAL_DELAY: f64 = 0.25;
+const SCRUB_REPEAT_INTERVAL: f64 = 0.03;
+
+struct PendingOpen {
+    local_path: String,
+    remote_path: String,
+    local_frames_dir: String,
+}
+
+struct DialogChannels {
+    open_file_rx: Option<crossbeam_channel::Receiver<Option<PathBuf>>>,
+    data_folder_rx: Option<crossbeam_channel::Receiver<Option<PathBuf>>>,
+    cache_folder_rx: Option<crossbeam_channel::Receiver<Option<PathBuf>>>,
+}
+
+impl DialogChannels {
+    fn new() -> Self {
+        Self {
+            open_file_rx: None,
+            data_folder_rx: None,
+            cache_folder_rx: None,
+        }
+    }
+}
+
+struct AppState {
+    window: Arc<Window>,
+    surface: wgpu::Surface<'static>,
+    surface_config: wgpu::SurfaceConfiguration,
+    gpu: Gpu,
+    imgui: ImGuiContext,
+    platform: WinitPlatform,
+    imgui_renderer: WgpuRenderer,
+    scene_texture: ExternalTextureId,
+    scene_generation: u64,
+    frame_texture: Option<ExternalTextureId>,
+    frame_generation: u64,
+    fps_font: dear_imgui_rs::FontId,
+
+    renderer: Renderer,
+    framebuffer: Framebuffer,
+    frame_image: ImageTexture,
+    icons: UiIcons,
+
+    // Persistence
+    settings: Config,
+    config_path: PathBuf,
+
+    // Cameras
+    orbit_cam: OrbitCamera,
+    free_cam: FreeCamera,
+    camera_is_free: bool,
+
+    // Input states
+    right_mouse_down: bool,
+    shift_down: bool,
+    orbiting: bool,
+    panning: bool,
+    viewport_hovered: bool,
+    keys_down: HashSet<KeyCode>,
+
+    // Sequence & Playback
+    sequence: Option<MeshSequence>,
+    current_gpu: Option<FrameGpu>,
+    loaded_frame: Option<usize>,
+    transform: Option<Transform>,
+    depth_reference: Option<f32>,
+    current_frame: usize,
+    playing: bool,
+    playback_speed: f32,
+    playback_accumulator: f64,
+    scrubbing: bool,
+    scrub_timer: f64,
+
+    // UI state
+    active_pane: i32, // 0 = Scene, 1 = Frame View
+    restore_focus_frames: i32,
+    explorer: FileExplorer,
+    show_remote_modal: bool,
+    show_storage_modal: bool,
+    remote_config: RemoteConfig,
+    remote_client: RemoteClient,
+    remote_fetch_worker: Arc<WorkerQueue>,
+    remote_open_worker: Arc<WorkerQueue>,
+    scrub_worker: ScrubWorker,
+    current_remote_path: String,
+    current_local_frames_dir: String,
+    active_sequence_id: Arc<AtomicU64>,
+
+    // Native file dialogs
+    dialogs: DialogChannels,
+    pending_open_file: Option<PendingOpen>,
+
+    // Timing
+    last_frame_time: Instant,
+}
+
+impl AppState {
+    fn open_sequence(&mut self, export_path: &str, start_frame: usize) {
+        self.frame_image.clear();
+        match MeshSequence::open(export_path) {
+            Ok(seq) => {
+                let frame_count = seq.frame_count();
+                if frame_count > 0 {
+                    self.current_frame = start_frame.min(frame_count - 1);
+                    self.sequence = Some(seq);
+                } else {
+                    eprintln!("No frames found in {export_path}");
+                    self.sequence = None;
+                    self.current_frame = 0;
+                }
+            }
+            Err(err) => {
+                eprintln!("Failed to open {export_path}: {err}");
+                self.sequence = None;
+                self.current_frame = 0;
+            }
+        }
+        self.current_gpu = None;
+        self.loaded_frame = None;
+        self.transform = None;
+        self.depth_reference = None;
+    }
+
+    fn active_camera_mut(&mut self) -> &mut dyn Camera {
+        if self.camera_is_free {
+            &mut self.free_cam
+        } else {
+            &mut self.orbit_cam
+        }
+    }
+
+    fn update_camera_mode(&mut self, free: bool) {
+        if self.camera_is_free != free {
+            if free {
+                self.free_cam.set_from_orbit(&self.orbit_cam);
+            } else {
+                self.orbit_cam.set_from_free(&self.free_cam);
+            }
+            self.camera_is_free = free;
+            self.settings.free_camera = free;
+        }
+    }
+}
+
+struct AppRunner {
+    settings: Config,
+    config_path: PathBuf,
+    state: Option<AppState>,
+}
+
+impl AppRunner {
+    fn new(settings: Config, config_path: PathBuf) -> Self {
+        Self {
+            settings,
+            config_path,
+            state: None,
+        }
+    }
+}
+
+impl ApplicationHandler for AppRunner {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.state.is_some() {
+            return;
+        }
+
+        let window_attributes = Window::default_attributes()
+            .with_title("Infant Hand Motion Viewer")
+            .with_inner_size(LogicalSize::new(
+                self.settings.window_width as f64,
+                self.settings.window_height as f64,
+            ))
+            .with_resizable(true);
+
+        let window = Arc::new(
+            event_loop
+                .create_window(window_attributes)
+                .expect("failed to create window"),
+        );
+
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle(Box::new(
+            event_loop.owned_display_handle(),
+        )));
+        let surface = instance
+            .create_surface(Arc::clone(&window))
+            .expect("failed to create window surface");
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: Some(&surface),
+            ..Default::default()
+        }))
+        .expect("failed to find a suitable GPU adapter");
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("infant hand motion viewer"),
+            ..Default::default()
+        }))
+        .expect("failed to create GPU device");
+        let gpu = Gpu { device, queue };
+
+        // Prefer a non-sRGB surface so UI colors are written raw, matching the C++ viewer's default framebuffer.
+        let caps = surface.get_capabilities(&adapter);
+        let surface_format = caps
+            .formats
+            .iter()
+            .copied()
+            .find(|f| !f.is_srgb())
+            .unwrap_or(caps.formats[0]);
+        let phys_size = window.inner_size();
+        let surface_config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: surface_format,
+            width: phys_size.width.max(1),
+            height: phys_size.height.max(1),
+            present_mode: wgpu::PresentMode::AutoVsync,
+            desired_maximum_frame_latency: 2,
+            alpha_mode: caps.alpha_modes[0],
+            color_space: wgpu::SurfaceColorSpace::Auto,
+            view_formats: vec![],
+        };
+        surface.configure(&gpu.device, &surface_config);
+
+        let mut imgui = ImGuiContext::create();
+        let config_flags = imgui.io().config_flags() | ConfigFlags::DOCKING_ENABLE;
+        imgui.io_mut().set_config_flags(config_flags);
+
+        // Remove the docking/collapse menu button (reclaims tab-bar offset everywhere)
+        imgui
+            .style_mut()
+            .set_window_menu_button_position(dear_imgui_rs::Direction::None);
+
+        // Rasterize glyphs with FreeType using light hinting (grid-fit stems to pixel grid for crisp UI text)
+        imgui
+            .font_atlas()
+            .set_font_loader_flags(dear_imgui_rs::fonts::FontLoaderFlags::LIGHT_HINTING);
+
+        // Add embedded UI font at UI_FONT_SIZE (22.0)
+        let _ui_font = imgui.font_atlas().add_font(&[unsafe {
+            dear_imgui_rs::FontSource::ttf_data_with_size(assets::UI_FONT, infant_hand_motion_viewer::ui::UI_FONT_SIZE)
+        }]);
+
+        // Add secondary FPS overlay font at FPS_FONT_SIZE (22.0) with thickened stroke weight
+        let fps_font = imgui.font_atlas().add_font(&[unsafe {
+            dear_imgui_rs::FontSource::ttf_data_with_size(assets::UI_FONT, infant_hand_motion_viewer::ui::FPS_FONT_SIZE)
+                .with_config(dear_imgui_rs::FontConfig::new().rasterizer_multiply(1.15))
+        }]);
+
+        let mut platform = WinitPlatform::new(&mut imgui).expect("failed to create winit platform");
+        platform
+            .attach_window(Arc::clone(&window), HiDpiMode::Default, &mut imgui)
+            .expect("failed to attach window to platform");
+
+        let mut imgui_renderer = WgpuRenderer::new(
+            WgpuInitInfo::new(gpu.device.clone(), gpu.queue.clone(), surface_format),
+            &mut imgui,
+        )
+        .expect("failed to create imgui renderer");
+        imgui_renderer.set_gamma_mode(GammaMode::Linear);
+
+        let renderer = Renderer::new(&gpu);
+        let framebuffer = Framebuffer::new(&gpu, phys_size.width.max(1), phys_size.height.max(1));
+        let scene_texture = imgui_renderer
+            .register_external_texture(framebuffer.color_view())
+            .expect("failed to register scene texture");
+        let scene_generation = framebuffer.generation();
+        let frame_image = ImageTexture::new();
+        let icons = UiIcons::new(&gpu, &mut imgui_renderer);
+
+        // Orbit & Free Cameras
+        let mut orbit_cam = OrbitCamera::new(self.settings.camera_distance);
+        orbit_cam.set_state(
+            self.settings.camera_azimuth,
+            self.settings.camera_elevation,
+            self.settings.camera_distance,
+            self.settings.camera_target,
+        );
+        let mut free_cam = FreeCamera::new();
+        if self.settings.free_camera {
+            free_cam.set_from_orbit(&orbit_cam);
+        }
+
+        let remote_config = RemoteConfig {
+            host: self.settings.remote_host.clone(),
+            port: self.settings.remote_port,
+            python_bin: self.settings.remote_python.clone(),
+            root_folder: self.settings.remote_data_folder.clone(),
+        };
+
+        if !self.settings.cache_folder.is_empty() {
+            CacheManager::set_custom_cache_root(Some(PathBuf::from(&self.settings.cache_folder)));
+        }
+
+        let remote_client = RemoteClient::new();
+        let scrub_worker = ScrubWorker::new(remote_client.clone());
+        let remote_fetch_worker = Arc::new(WorkerQueue::new());
+        let remote_open_worker = Arc::new(WorkerQueue::new());
+
+        let mut explorer = FileExplorer::new();
+        explorer.set_remote_client(remote_client.clone());
+        explorer.set_remote_root(&self.settings.remote_data_folder);
+        explorer.set_saved_open(self.settings.expanded_folders.clone());
+
+        if self.settings.remote_mode && !self.settings.remote_host.is_empty() {
+            explorer.set_mode(SourceMode::Remote);
+            remote_client.connect_async(remote_config.clone());
+        } else if let Some(ref data_folder) = self.settings.data_folder {
+            explorer.set_root(data_folder);
+        }
+
+        let mut app_state = AppState {
+            window,
+            surface,
+            surface_config,
+            gpu,
+            imgui,
+            platform,
+            imgui_renderer,
+            scene_texture,
+            scene_generation,
+            frame_texture: None,
+            frame_generation: 0,
+            fps_font,
+            renderer,
+            framebuffer,
+            frame_image,
+            icons,
+            settings: self.settings.clone(),
+            config_path: self.config_path.clone(),
+            orbit_cam,
+            free_cam,
+            camera_is_free: self.settings.free_camera,
+            right_mouse_down: false,
+            shift_down: false,
+            orbiting: false,
+            panning: false,
+            viewport_hovered: false,
+            keys_down: HashSet::new(),
+            sequence: None,
+            current_gpu: None,
+            loaded_frame: None,
+            transform: None,
+            depth_reference: None,
+            current_frame: self.settings.last_frame,
+            playing: false,
+            playback_speed: self.settings.playback_speed,
+            playback_accumulator: 0.0,
+            scrubbing: false,
+            scrub_timer: -1.0,
+            active_pane: self.settings.active_pane,
+            restore_focus_frames: 3,
+            explorer,
+            show_remote_modal: false,
+            show_storage_modal: false,
+            remote_config,
+            remote_client,
+            remote_fetch_worker,
+            remote_open_worker,
+            scrub_worker,
+            current_remote_path: String::new(),
+            current_local_frames_dir: String::new(),
+            active_sequence_id: Arc::new(AtomicU64::new(0)),
+            dialogs: DialogChannels::new(),
+            pending_open_file: None,
+            last_frame_time: Instant::now(),
+        };
+
+        if let Some(last_folder) = app_state.settings.last_folder.clone()
+            && Path::new(&last_folder).is_file()
+        {
+            let start_frame = app_state.settings.last_frame;
+            app_state.open_sequence(&last_folder, start_frame);
+        }
+
+        self.state = Some(app_state);
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
+        let Some(ref mut state) = self.state else {
+            return;
+        };
+
+        // Forward event to dear-imgui-winit
+        let _ = state
+            .platform
+            .handle_window_event(&mut state.imgui, &state.window, &event);
+
+        match event {
+            WindowEvent::CloseRequested => {
+                // Persist settings before quitting
+                if let Some(ref seq) = state.sequence {
+                    state.settings.last_folder = Some(seq.path().to_string());
+                    state.settings.last_frame = state.current_frame;
+                }
+                state.settings.active_pane = state.active_pane;
+                state.settings.playback_speed = state.playback_speed;
+                state.settings.expanded_folders = state.explorer.expanded_paths();
+                if state.camera_is_free {
+                    state.orbit_cam.set_from_free(&state.free_cam);
+                }
+                let (az, el, dist, target) = state.orbit_cam.get_state();
+                state.settings.camera_azimuth = az;
+                state.settings.camera_elevation = el;
+                state.settings.camera_distance = dist;
+                state.settings.camera_target = target;
+
+                let _ = state.settings.save(&state.config_path);
+                event_loop.exit();
+            }
+            WindowEvent::Resized(size) => {
+                if size.width > 0 && size.height > 0 {
+                    state.surface_config.width = size.width;
+                    state.surface_config.height = size.height;
+                    state.surface.configure(&state.gpu.device, &state.surface_config);
+                }
+            }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                state.shift_down = modifiers.state().shift_key();
+            }
+            WindowEvent::KeyboardInput {
+                event:
+                    KeyEvent {
+                        physical_key: PhysicalKey::Code(key),
+                        state: el_state,
+                        repeat,
+                        ..
+                    },
+                ..
+            } => {
+                let pressed = el_state == ElementState::Pressed;
+                if pressed {
+                    state.keys_down.insert(key);
+                } else {
+                    state.keys_down.remove(&key);
+                }
+
+                let modal_open = state.show_remote_modal || state.show_storage_modal;
+                let want_text = state.imgui.io().want_text_input();
+
+                if pressed && !repeat {
+                    match key {
+                        KeyCode::Escape => {
+                            if modal_open {
+                                state.show_remote_modal = false;
+                                state.show_storage_modal = false;
+                            } else if !want_text {
+                                event_loop.exit();
+                            }
+                        }
+                        KeyCode::F11 => {
+                            if state.window.fullscreen().is_some() {
+                                state.window.set_fullscreen(None);
+                                state.settings.window_fullscreen = false;
+                            } else {
+                                state.window.set_fullscreen(Some(Fullscreen::Borderless(None)));
+                                state.settings.window_fullscreen = true;
+                            }
+                        }
+                        KeyCode::Space if !want_text && !modal_open => {
+                            if state.sequence.is_some() {
+                                state.playing = !state.playing;
+                            }
+                        }
+                        KeyCode::KeyH if !want_text && !modal_open => {
+                            state.settings.hand_translucent = !state.settings.hand_translucent;
+                        }
+                        KeyCode::KeyR if !want_text && !modal_open => {
+                            state.active_camera_mut().reset();
+                        }
+                        KeyCode::Home if !want_text && !modal_open => {
+                            state.current_frame = 0;
+                        }
+                        KeyCode::End if !want_text && !modal_open => {
+                            if let Some(ref seq) = state.sequence {
+                                state.current_frame = seq.frame_count().saturating_sub(1);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            WindowEvent::MouseInput {
+                button,
+                state: el_state,
+                ..
+            } => {
+                if button == MouseButton::Right {
+                    let pressed = el_state == ElementState::Pressed;
+                    state.right_mouse_down = pressed;
+                    if pressed && state.viewport_hovered {
+                        if state.shift_down {
+                            state.panning = true;
+                        } else {
+                            state.orbiting = true;
+                        }
+                    } else {
+                        state.orbiting = false;
+                        state.panning = false;
+                    }
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                if state.viewport_hovered {
+                    let y = match delta {
+                        MouseScrollDelta::LineDelta(_, y) => y,
+                        MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0) as f32,
+                    };
+                    if y != 0.0 {
+                        state.active_camera_mut().zoom(y);
+                    }
+                }
+            }
+            WindowEvent::RedrawRequested => {
+                render_app_frame(state, event_loop);
+            }
+            _ => {}
+        }
+    }
+
+    fn device_event(&mut self, _event_loop: &ActiveEventLoop, _device_id: DeviceId, event: DeviceEvent) {
+        let Some(ref mut state) = self.state else {
+            return;
+        };
+
+        if let DeviceEvent::MouseMotion { delta: (dx, dy) } = event {
+            let dx = dx as f32;
+            let dy = dy as f32;
+            if state.orbiting {
+                state.active_camera_mut().orbit(dx, dy);
+            } else if state.panning {
+                state.active_camera_mut().pan(dx, dy);
+            }
+        }
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(ref state) = self.state {
+            state.window.request_redraw();
+        }
+    }
+}
+
+fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
+    let now = Instant::now();
+    let dt = (now - state.last_frame_time).as_secs_f64();
+    state.last_frame_time = now;
+
+    if let Some(ref rx) = state.dialogs.open_file_rx
+        && let Ok(result) = rx.try_recv()
+    {
+        if let Some(path) = result {
+            state.pending_open_file = Some(PendingOpen {
+                local_path: path.to_string_lossy().into_owned(),
+                remote_path: String::new(),
+                local_frames_dir: String::new(),
+            });
+        }
+        state.dialogs.open_file_rx = None;
+    }
+
+    if let Some(ref rx) = state.dialogs.data_folder_rx
+        && let Ok(result) = rx.try_recv()
+    {
+        if let Some(folder) = result {
+            let folder_str = folder.to_string_lossy().into_owned();
+            state.explorer.set_root(&folder_str);
+            state.settings.data_folder = Some(folder_str);
+        }
+        state.dialogs.data_folder_rx = None;
+    }
+
+    if let Some(ref rx) = state.dialogs.cache_folder_rx
+        && let Ok(result) = rx.try_recv()
+    {
+        if let Some(folder) = result {
+            let folder_str = folder.to_string_lossy().into_owned();
+            state.settings.cache_folder = folder_str.clone();
+            CacheManager::set_custom_cache_root(Some(PathBuf::from(folder_str)));
+        }
+        state.dialogs.cache_folder_rx = None;
+    }
+
+    // Apply deferred open
+    if let Some(pending) = state.pending_open_file.take() {
+        state.current_remote_path = pending.remote_path;
+        state.current_local_frames_dir = pending.local_frames_dir;
+        state.open_sequence(&pending.local_path, 0);
+
+        let seq_id = state.active_sequence_id.fetch_add(1, Ordering::SeqCst) + 1;
+        state.remote_fetch_worker.clear();
+        state.scrub_worker.cancel();
+
+        if !state.current_remote_path.is_empty()
+            && state.remote_client.is_connected()
+            && let Some(ref seq) = state.sequence
+            && let Some(frame1_num) = seq.frame_number(0)
+            && frame1_num > 0
+        {
+            let dest = Path::new(&state.current_local_frames_dir).join(format!("frame_{frame1_num:05}.jpg"));
+            state
+                .scrub_worker
+                .request(state.current_remote_path.clone(), frame1_num as u32, dest);
+        }
+        let _ = seq_id;
+    }
+
+    // Camera WASD / QE movement
+    let modal_open = state.show_remote_modal || state.show_storage_modal;
+    let want_text = state.imgui.io().want_text_input();
+    if !want_text && !modal_open {
+        let mut forward = 0.0f32;
+        let mut right = 0.0f32;
+        let mut up = 0.0f32;
+
+        if state.keys_down.contains(&KeyCode::KeyW) {
+            forward += 1.0;
+        }
+        if state.keys_down.contains(&KeyCode::KeyS) {
+            forward -= 1.0;
+        }
+        if state.keys_down.contains(&KeyCode::KeyD) {
+            right += 1.0;
+        }
+        if state.keys_down.contains(&KeyCode::KeyA) {
+            right -= 1.0;
+        }
+        if state.keys_down.contains(&KeyCode::KeyE) {
+            up += 1.0;
+        }
+        if state.keys_down.contains(&KeyCode::KeyQ) {
+            up -= 1.0;
+        }
+
+        if forward != 0.0 || right != 0.0 || up != 0.0 {
+            state.active_camera_mut().move_camera(forward, right, up, dt as f32);
+        }
+
+        // Left / Right arrow scrubbing
+        let mut scrub_dir = 0i32;
+        if state.keys_down.contains(&KeyCode::ArrowRight) {
+            scrub_dir += 1;
+        }
+        if state.keys_down.contains(&KeyCode::ArrowLeft) {
+            scrub_dir -= 1;
+        }
+
+        if let Some(ref seq) = state.sequence {
+            if !state.playing && scrub_dir != 0 {
+                let mut step_now = false;
+                if state.scrub_timer < 0.0 {
+                    step_now = true;
+                    state.scrub_timer = SCRUB_INITIAL_DELAY;
+                } else {
+                    state.scrub_timer -= dt;
+                    if state.scrub_timer <= 0.0 {
+                        step_now = true;
+                        state.scrub_timer = SCRUB_REPEAT_INTERVAL;
+                    }
+                }
+                if step_now {
+                    let total = seq.frame_count();
+                    if total > 0 {
+                        let next = (state.current_frame as i32 + scrub_dir).clamp(0, total as i32 - 1);
+                        state.current_frame = next as usize;
+                    }
+                }
+            } else {
+                state.scrub_timer = -1.0;
+            }
+        }
+    }
+
+    // Playback progression
+    if let Some(ref seq) = state.sequence {
+        let frame_count = seq.frame_count();
+        if state.playing && !state.scrubbing && frame_count > 0 {
+            state.playback_accumulator += dt;
+            let step = (state.playback_accumulator * PLAYBACK_FPS * state.playback_speed as f64) as usize;
+            if step > 0 {
+                state.playback_accumulator -= (step as f64) / (PLAYBACK_FPS * state.playback_speed as f64);
+                state.current_frame = (state.current_frame + step) % frame_count;
+            }
+        } else {
+            state.playback_accumulator = 0.0;
+        }
+    }
+
+    // Prepare GPU mesh if frame changed
+    let has_sequence = state.sequence.is_some();
+    let frame_count = state.sequence.as_ref().map(|s| s.frame_count()).unwrap_or(0);
+
+    if let Some(ref seq) = state.sequence {
+        if state.transform.is_none()
+            && frame_count > 0
+            && let Some(f0) = seq.load_frame(0)
+        {
+            state.transform = Some(compute_transform(f0));
+            state.depth_reference = Some(reference_depth(f0));
+        }
+
+        if state.loaded_frame != Some(state.current_frame) && frame_count > 0 {
+            if let Some(frame) = seq.load_frame(state.current_frame) {
+                let prepared = prepare_frame(frame, state.settings.per_track_coloring);
+                state.current_gpu = Some(FrameGpu::new(&state.gpu, &prepared));
+                state.loaded_frame = Some(state.current_frame);
+            }
+
+            // Load video frame image if available
+            if let Some(ref img_path) = seq.frame_image_path(state.current_frame) {
+                state.frame_image.load(&state.gpu, &img_path.to_string_lossy());
+            } else {
+                state.frame_image.clear();
+                if !state.current_remote_path.is_empty()
+                    && state.remote_client.is_connected()
+                    && let Some(f_num) = seq.frame_number(state.current_frame)
+                    && f_num > 0
+                {
+                    let dest = Path::new(&state.current_local_frames_dir).join(format!("frame_{f_num:05}.jpg"));
+                    state
+                        .scrub_worker
+                        .request(state.current_remote_path.clone(), f_num as u32, dest);
+                }
+            }
+        }
+    }
+
+    // Format status line
+    let status = if let Some(ref seq) = state.sequence {
+        let hands = seq.hand_count(state.current_frame);
+        let s_suffix = if hands == 1 { "" } else { "s" };
+        format!(
+            "frame {} / {} - {} hand{}",
+            state.current_frame + 1,
+            frame_count,
+            hands,
+            s_suffix
+        )
+    } else {
+        String::new()
+    };
+
+    // Prepare ImGui Frame
+    state
+        .platform
+        .prepare_frame(&mut state.imgui, &state.window)
+        .expect("failed to prepare imgui frame");
+
+    let frame_texture_id = sync_frame_texture(state);
+
+    let open_file_label = state
+        .sequence
+        .as_ref()
+        .map(|s| s.path().to_string())
+        .unwrap_or_default();
+
+    let menu_state = MenuState {
+        hand_translucent: state.settings.hand_translucent,
+        show_camera_marker: state.settings.show_camera_marker,
+        free_camera: state.settings.free_camera,
+        per_track_coloring: state.settings.per_track_coloring,
+        open_file: open_file_label,
+        remote_connected: state.remote_client.is_connected(),
+    };
+
+    let key_explorer = WindowKey::new("Explorer", "Explorer").expect("explorer key");
+    let key_scene = WindowKey::new("Scene", "Scene").expect("scene key");
+    let key_frame_view = WindowKey::new("Frame View", "Frame View").expect("frame view key");
+    let key_flags = WindowKey::new("Flags", "Flags").expect("flags key");
+
+    let full_layout = DockLayout::split(
+        DockSplit::Left,
+        0.25,
+        DockLayout::tabs([&key_explorer]),
+        DockLayout::split(
+            DockSplit::Right,
+            0.333,
+            DockLayout::split(
+                DockSplit::Down,
+                0.30,
+                DockLayout::tabs([&key_flags]),
+                DockLayout::tabs([&key_frame_view]),
+            ),
+            DockLayout::tabs([&key_scene]),
+        ),
+    );
+
+    let (menu_result, explorer_result, viewport_result, image_result, browse_cache_requested) = {
+        let ui = state.imgui.frame();
+
+        let menu_result = draw_menu_bar(ui, menu_state);
+
+        let _dock_id = ui
+            .dockspace()
+            .main_viewport()
+            .flags(DockNodeFlags::PASSTHRU_CENTRAL_NODE)
+            .layout(&full_layout, DockLayoutApply::IfMissing)
+            .build();
+
+        // Build transport props
+        let transport_pane = state.active_pane;
+        let transport_base = Transport {
+            has_sequence,
+            current_frame: state.current_frame,
+            frame_count,
+            playing: state.playing,
+            speed: state.playback_speed,
+            show_transport: false,
+            sequence: state.sequence.as_ref(),
+            per_track_coloring: state.settings.per_track_coloring,
+            flag_layers_enabled: state.settings.flag_layers_enabled,
+        };
+
+        let viewport_transport = Transport {
+            show_transport: transport_pane == 0,
+            ..transport_base
+        };
+        let image_transport = Transport {
+            show_transport: transport_pane == 1,
+            ..transport_base
+        };
+
+        let v_res = draw_viewport_window(
+            ui,
+            Some(state.scene_texture.texture_id()),
+            [state.framebuffer.width(), state.framebuffer.height()],
+            ui.io().framerate(),
+            Some(state.fps_font),
+            &status,
+            state.settings.show_controls,
+            &viewport_transport,
+            &state.icons,
+            None,
+        );
+
+        let i_res = draw_image_window(
+            ui,
+            "Frame View###Frame View",
+            frame_texture_id,
+            state.frame_image.width(),
+            state.frame_image.height(),
+            &image_transport,
+            &state.icons,
+            None,
+        );
+
+        draw_flags_window(ui, "Flags###Flags", &mut state.settings.flag_layers_enabled, None);
+
+        let explorer_result = state.explorer.draw_explorer_window(ui, &state.icons, None);
+
+        draw_remote_modal(
+            ui,
+            &mut state.show_remote_modal,
+            &mut state.remote_config,
+            &state.remote_client,
+        );
+
+        let mut browse_cache = false;
+        draw_storage_modal(
+            ui,
+            &mut state.show_storage_modal,
+            &mut state.settings.cache_folder,
+            &mut browse_cache,
+        );
+
+        if state.restore_focus_frames > 0 {
+            state.restore_focus_frames -= 1;
+            ui.set_window_focus(Some(if state.active_pane == 1 {
+                "Frame View###Frame View"
+            } else {
+                "Scene###Scene"
+            }));
+        }
+
+        state
+            .platform
+            .prepare_render(ui, &state.window)
+            .expect("failed to prepare imgui render");
+
+        (menu_result, explorer_result, v_res, i_res, browse_cache)
+    };
+
+    state.settings.show_controls = viewport_result.show_controls;
+    state.viewport_hovered = viewport_result.hovered;
+    state.settings.hand_translucent = menu_result.state.hand_translucent;
+    state.settings.show_camera_marker = menu_result.state.show_camera_marker;
+    if menu_result.state.free_camera != state.camera_is_free {
+        state.update_camera_mode(menu_result.state.free_camera);
+    }
+    if menu_result.state.per_track_coloring != state.settings.per_track_coloring {
+        state.settings.per_track_coloring = menu_result.state.per_track_coloring;
+        state.loaded_frame = None; // Trigger re-prepare
+    }
+
+    if menu_result.exit_requested {
+        event_loop.exit();
+        return;
+    }
+    if menu_result.open_remote_modal_requested || explorer_result.change_remote_requested {
+        state.show_remote_modal = true;
+    }
+    if menu_result.open_storage_modal_requested {
+        state.show_storage_modal = true;
+    }
+    if menu_result.disconnect_remote_requested {
+        state.remote_client.disconnect();
+        state.settings.remote_mode = false;
+        state.explorer.set_mode(SourceMode::Local);
+        if let Some(ref df) = state.settings.data_folder {
+            state.explorer.set_root(df);
+        }
+    }
+
+    // Native dialog requests
+    if menu_result.export_file_requested && state.dialogs.open_file_rx.is_none() {
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        std::thread::spawn(move || {
+            let res = rfd::FileDialog::new()
+                .add_filter("Hand export files", &["hexport"])
+                .pick_file();
+            let _ = tx.send(res);
+        });
+        state.dialogs.open_file_rx = Some(rx);
+    }
+
+    if explorer_result.choose_root_requested && state.dialogs.data_folder_rx.is_none() {
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        std::thread::spawn(move || {
+            let res = rfd::FileDialog::new().pick_folder();
+            let _ = tx.send(res);
+        });
+        state.dialogs.data_folder_rx = Some(rx);
+    }
+
+    if browse_cache_requested && state.dialogs.cache_folder_rx.is_none() {
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        std::thread::spawn(move || {
+            let res = rfd::FileDialog::new().pick_folder();
+            let _ = tx.send(res);
+        });
+        state.dialogs.cache_folder_rx = Some(rx);
+    }
+
+    if let Some(open_path) = explorer_result.open_file {
+        if explorer_result.is_remote {
+            let remote_path = open_path;
+            let host = if !state.remote_client.config().host.is_empty() {
+                state.remote_client.config().host
+            } else {
+                state.settings.remote_host.clone()
+            };
+            let local_export = CacheManager::get_local_export_path(&host, Path::new(&remote_path));
+            let local_frames_dir = CacheManager::get_local_frames_dir(&local_export);
+
+            if CacheManager::is_export_cached(&local_export) {
+                state.pending_open_file = Some(PendingOpen {
+                    local_path: local_export.to_string_lossy().into_owned(),
+                    remote_path,
+                    local_frames_dir: local_frames_dir.to_string_lossy().into_owned(),
+                });
+            } else {
+                let client = state.remote_client.clone();
+                let seq_generation = state.active_sequence_id.fetch_add(1, Ordering::SeqCst) + 1;
+                let active_id = Arc::clone(&state.active_sequence_id);
+                state.remote_open_worker.submit(move || {
+                    if client.fetch_file(&remote_path, &local_export).is_ok()
+                        && active_id.load(Ordering::SeqCst) == seq_generation
+                    {
+                        // File downloaded successfully
+                    }
+                });
+            }
+        } else {
+            state.pending_open_file = Some(PendingOpen {
+                local_path: open_path,
+                remote_path: String::new(),
+                local_frames_dir: String::new(),
+            });
+        }
+    }
+
+    // Echo transport state back
+    let echo = if state.active_pane == 1 {
+        &image_result.transport
+    } else {
+        &viewport_result.transport
+    };
+    if has_sequence {
+        state.current_frame = echo.current_frame;
+        state.playing = echo.playing;
+        state.scrubbing = echo.scrubbing;
+        state.playback_speed = echo.speed;
+    }
+    if viewport_result.focused {
+        state.active_pane = 0;
+    } else if image_result.focused {
+        state.active_pane = 1;
+    }
+
+    // Resize the offscreen target to the scene window's size and repoint the UI texture at it
+    if state
+        .framebuffer
+        .resize(&state.gpu, viewport_result.width, viewport_result.height)
+        && state.framebuffer.generation() != state.scene_generation
+    {
+        state.scene_generation = state.framebuffer.generation();
+        state
+            .imgui_renderer
+            .update_external_texture(state.scene_texture, state.framebuffer.color_view())
+            .expect("failed to update scene texture");
+    }
+
+    // Render 3D Scene into offscreen Framebuffer
+    let cam: &dyn Camera = if state.camera_is_free {
+        &state.free_cam
+    } else {
+        &state.orbit_cam
+    };
+    let scene_req = SceneRender {
+        frame: state.current_gpu.as_ref(),
+        translucent: state.settings.hand_translucent,
+        transform: state.transform.as_ref(),
+        reference_depth: state.depth_reference,
+        show_camera_marker: state.settings.show_camera_marker,
+    };
+    state
+        .renderer
+        .render_scene(&state.gpu, &state.framebuffer, cam, &scene_req);
+
+    // Render ImGui onto the window surface
+    let surface_texture = match state.surface.get_current_texture() {
+        wgpu::CurrentSurfaceTexture::Success(texture) => texture,
+        wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
+            state.surface.configure(&state.gpu.device, &state.surface_config);
+            texture
+        }
+        wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+            state.surface.configure(&state.gpu.device, &state.surface_config);
+            return;
+        }
+        _ => return,
+    };
+    let surface_view = surface_texture
+        .texture
+        .create_view(&wgpu::TextureViewDescriptor::default());
+
+    let consumer = state.imgui_renderer.renderer_consumer().expect("renderer consumer");
+    let pending_frame = state.imgui.render(consumer);
+
+    let mut encoder = state
+        .gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("ui") });
+    {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("ui pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &surface_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 0.08,
+                        g: 0.08,
+                        b: 0.10,
+                        a: 1.0,
+                    }),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        state
+            .imgui_renderer
+            .render(
+                pending_frame,
+                &mut pass,
+                FramebufferExtent::from_texture(&surface_texture.texture),
+            )
+            .expect("failed to render imgui");
+    }
+    state.gpu.queue.submit([encoder.finish()]);
+    state.window.pre_present_notify();
+    state.gpu.queue.present(surface_texture);
+}
+
+/// Keeps the UI's registration of the frame image texture pointed at its current GPU texture.
+fn sync_frame_texture(state: &mut AppState) -> Option<TextureId> {
+    let view = state.frame_image.view()?;
+    let generation = state.frame_image.generation();
+    match state.frame_texture {
+        Some(id) if state.frame_generation == generation => Some(id.texture_id()),
+        Some(id) => {
+            state.imgui_renderer.update_external_texture(id, view).ok()?;
+            state.frame_generation = generation;
+            Some(id.texture_id())
+        }
+        None => {
+            let id = state.imgui_renderer.register_external_texture(view).ok()?;
+            state.frame_texture = Some(id);
+            state.frame_generation = generation;
+            Some(id.texture_id())
+        }
+    }
+}
+
 fn main() {
-    println!("Hello, world!");
+    let config_path = Config::default_config_path();
+    let settings = Config::load(&config_path);
+
+    let event_loop = EventLoop::new().expect("failed to create event loop");
+    event_loop.set_control_flow(ControlFlow::Poll);
+
+    let mut app = AppRunner::new(settings, config_path);
+    event_loop.run_app(&mut app).expect("application event loop failed");
 }
