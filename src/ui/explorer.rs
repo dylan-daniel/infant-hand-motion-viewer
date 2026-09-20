@@ -7,7 +7,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering as AtomicOrdering},
 };
 
-use dear_imgui_rs::{Condition, Id, TreeNodeFlags, Ui, WindowFlags};
+use dear_imgui_rs::{Condition, Id, StyleColor, TextureId, Ui, WindowFlags};
 
 use crate::data::hand_export::read_hexport_metadata;
 use crate::remote::{ExplorerNode, RemoteClient};
@@ -475,16 +475,19 @@ impl FileExplorer {
         live_open: &mut HashSet<String>,
         saved_open: &HashSet<String>,
     ) {
+        let node_left = ui.cursor_screen_pos()[0];
+
         if node.is_file {
-            if let Some(tex) = icons.file_hexport {
-                ui.image(tex, [14.0, 14.0]);
-                ui.same_line();
-            }
-
-            let mut flags = TreeNodeFlags::LEAF | TreeNodeFlags::NO_TREE_PUSH_ON_OPEN;
-            flags |= TreeNodeFlags::SPAN_AVAIL_WIDTH;
-
-            let node_token = ui.tree_node_config(&node.name).leaf(true).span_avail_width(true).push();
+            let node_token = ui
+                .tree_node_config(&node.path)
+                .label("")
+                .leaf(true)
+                .no_tree_push_on_open(true)
+                .open_on_arrow(true)
+                .open_on_double_click(true)
+                .span_full_width(true)
+                .push();
+            Self::draw_node_label(ui, icons.file_hexport, &node.name, node_left);
 
             if node_token.is_some() && ui.is_item_clicked() {
                 result.open_file = Some(node.path.clone());
@@ -494,18 +497,52 @@ impl FileExplorer {
             let should_open = node.default_open || saved_open.contains(&node.path);
 
             let node_token = ui
-                .tree_node_config(&node.name)
+                .tree_node_config(&node.path)
+                .label("")
                 .opened(should_open, Condition::FirstUseEver)
-                .span_avail_width(true)
+                .open_on_arrow(true)
+                .open_on_double_click(true)
+                .span_full_width(true)
                 .push();
+            let open = node_token.is_some();
+            let icon = if open { icons.folder_open } else { icons.folder_closed };
+            Self::draw_node_label(ui, icon, &node.name, node_left);
 
-            if node_token.is_some() {
+            if open {
                 live_open.insert(node.path.clone());
                 for child in &node.children {
                     Self::draw_node(ui, child, icons, is_remote, result, live_open, saved_open);
                 }
             }
         }
+    }
+
+    /// Paint the icon and name over the row just submitted with an empty label, so the icon sits between the arrow and the text.
+    fn draw_node_label(ui: &Ui, icon: Option<TextureId>, name: &str, node_left: f32) {
+        let icon_size = ui.current_font_size();
+        let item_min = ui.item_rect_min();
+        let item_max = ui.item_rect_max();
+        let label_x = node_left + ui.tree_node_to_label_spacing();
+        let center_y = (item_min[1] + item_max[1]) * 0.5;
+        let draw_list = ui.get_window_draw_list();
+
+        let mut text_x = label_x;
+        if let Some(tex) = icon {
+            draw_list.add_image(
+                tex,
+                [label_x, center_y - icon_size * 0.5],
+                [label_x + icon_size, center_y + icon_size * 0.5],
+                [0.0, 0.0],
+                [1.0, 1.0],
+                crate::ui::rgba(255, 255, 255, 255),
+            );
+            text_x += icon_size + ui.clone_style().item_inner_spacing()[0];
+        }
+        draw_list.add_text(
+            [text_x, center_y - icon_size * 0.5],
+            ui.style_color(StyleColor::Text),
+            name,
+        );
     }
 }
 
