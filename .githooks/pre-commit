@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -e
+
+# Ensure cargo/just/rust toolchain is in PATH
+export PATH="$HOME/.cargo/bin:$PATH"
+
+if ! command -v just >/dev/null 2>&1; then
+    echo "❌ 'just' command was not found."
+    echo "Please ensure 'just' is installed and available in your PATH."
+    exit 1
+fi
+
+just check
