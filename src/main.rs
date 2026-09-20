@@ -804,6 +804,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         .prepare_frame(&mut state.imgui, &state.window)
         .expect("failed to prepare imgui frame");
 
+    state.frame_image.update(&state.gpu);
     let frame_texture_id = sync_frame_texture(state);
 
     let open_file_label = state
