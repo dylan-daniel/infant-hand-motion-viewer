@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use winit::application::ApplicationHandler;
-use winit::dpi::LogicalSize;
+use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::event::{DeviceEvent, DeviceId, ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
@@ -198,13 +198,19 @@ impl ApplicationHandler for AppRunner {
             return;
         }
 
-        let window_attributes = Window::default_attributes()
+        let mut window_attributes = Window::default_attributes()
             .with_title("Infant Hand Motion Viewer")
             .with_inner_size(LogicalSize::new(
                 self.settings.window_width as f64,
                 self.settings.window_height as f64,
             ))
             .with_resizable(true);
+        if let (Some(x), Some(y)) = (self.settings.window_x, self.settings.window_y) {
+            window_attributes = window_attributes.with_position(PhysicalPosition::new(x, y));
+        }
+        if self.settings.window_fullscreen {
+            window_attributes = window_attributes.with_fullscreen(Some(Fullscreen::Borderless(None)));
+        }
 
         let window = Arc::new(
             event_loop
@@ -435,6 +441,27 @@ impl ApplicationHandler for AppRunner {
                 state.settings.camera_elevation = el;
                 state.settings.camera_distance = dist;
                 state.settings.camera_target = target;
+
+                let remote = state.remote_client.config();
+                state.settings.remote_mode = state.remote_client.is_connected();
+                if !remote.host.is_empty() {
+                    state.settings.remote_host = remote.host;
+                    state.settings.remote_port = remote.port;
+                    state.settings.remote_python = remote.python_bin;
+                    state.settings.remote_data_folder = remote.root_folder;
+                }
+
+                state.settings.window_fullscreen = state.window.fullscreen().is_some();
+                if !state.settings.window_fullscreen && state.window.is_minimized() != Some(true) {
+                    let scale = state.window.scale_factor();
+                    let size = state.window.inner_size().to_logical::<f64>(scale);
+                    state.settings.window_width = size.width.round().max(1.0) as u32;
+                    state.settings.window_height = size.height.round().max(1.0) as u32;
+                    if let Ok(pos) = state.window.outer_position() {
+                        state.settings.window_x = Some(pos.x);
+                        state.settings.window_y = Some(pos.y);
+                    }
+                }
 
                 let _ = state.settings.save(&state.config_path);
                 event_loop.exit();
