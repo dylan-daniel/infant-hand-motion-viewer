@@ -23,7 +23,7 @@ use infant_hand_motion_viewer::data::{MeshSequence, Transform, compute_transform
 use infant_hand_motion_viewer::graphics::{
     Camera, FrameGpu, Framebuffer, FreeCamera, Gpu, ImageTexture, OrbitCamera, Renderer, SceneRender, prepare_frame,
 };
-use infant_hand_motion_viewer::remote::{CacheManager, RemoteClient, RemoteConfig, ScrubWorker};
+use infant_hand_motion_viewer::remote::{CacheManager, ConnectionState, RemoteClient, RemoteConfig, ScrubWorker};
 use infant_hand_motion_viewer::ui::{
     FileExplorer, MenuState, SourceMode, Transport, UiIcons, draw_flags_window, draw_image_window, draw_menu_bar,
     draw_remote_modal, draw_storage_modal, draw_viewport_window,
@@ -443,7 +443,6 @@ impl ApplicationHandler for AppRunner {
                 state.settings.camera_target = target;
 
                 let remote = state.remote_client.config();
-                state.settings.remote_mode = state.remote_client.is_connected();
                 if !remote.host.is_empty() {
                     state.settings.remote_host = remote.host;
                     state.settings.remote_port = remote.port;
@@ -637,6 +636,33 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             CacheManager::set_custom_cache_root(Some(PathBuf::from(folder_str)));
         }
         state.dialogs.cache_folder_rx = None;
+    }
+
+    // Track the remote connection: point the explorer at the remote tree once connected, fall back to local otherwise
+    state.remote_client.poll();
+    if state.remote_client.consume_just_connected() {
+        let remote = state.remote_client.config();
+        state.remote_config = remote.clone();
+        state.settings.remote_mode = true;
+        state.settings.remote_host = remote.host;
+        state.settings.remote_port = remote.port;
+        state.settings.remote_python = remote.python_bin;
+        state.settings.remote_data_folder = remote.root_folder.clone();
+        let _ = state.settings.save(&state.config_path);
+
+        state.explorer.set_remote_root(&remote.root_folder);
+        state.explorer.set_mode(SourceMode::Remote);
+        state.explorer.refresh();
+    }
+    if matches!(
+        state.remote_client.state(),
+        ConnectionState::Disconnected | ConnectionState::Error
+    ) && state.explorer.mode() == SourceMode::Remote
+    {
+        state.explorer.set_mode(SourceMode::Local);
+        if let Some(ref df) = state.settings.data_folder {
+            state.explorer.set_root(df);
+        }
     }
 
     // Apply deferred open
