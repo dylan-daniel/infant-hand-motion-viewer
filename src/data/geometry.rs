@@ -75,6 +75,17 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> Vec3 {
     }
 }
 
+/// The camera a hand was regressed under: the full-frame translation WiLoR produced, the focal length that
+/// translation was computed with, and the size of the image it was regressed on.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HandCamera {
+    /// Translation from the export, before the viewer's axis flip.
+    pub cam_t: Vec3,
+    pub focal_length: f32,
+    pub img_w: u32,
+    pub img_h: u32,
+}
+
 /// One hand in one frame: the moving MANO surface vertices and joint positions, plus identity metadata.
 #[derive(Debug, Clone)]
 pub struct HandData {
@@ -83,6 +94,8 @@ pub struct HandData {
     pub is_right: bool,
     pub hand_track_id: i32,
     pub label: String,
+    /// The camera this hand was fitted under, when the source recorded one.
+    pub camera: Option<HandCamera>,
 }
 
 /// Fixed translation and scale framing a sequence on the 3D grid.

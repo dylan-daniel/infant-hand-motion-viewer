@@ -4,9 +4,9 @@ pub mod mano_model;
 pub mod mesh_sequence;
 
 pub use geometry::{
-    DEFAULT_COLOR, FINGER_COLORS, HAND_BONES, HandData, LEFT_HAND_COLOR, MODEL_FIT_SPAN, MeshArrays, PreparedMesh,
-    RIGHT_HAND_COLOR, Transform, bounding_diagonal, build_indexed_surface, build_joint_mesh, compute_transform,
-    finger_of, mano_faces, prepare_hand, track_color,
+    DEFAULT_COLOR, FINGER_COLORS, HAND_BONES, HandCamera, HandData, LEFT_HAND_COLOR, MODEL_FIT_SPAN, MeshArrays,
+    PreparedMesh, RIGHT_HAND_COLOR, Transform, bounding_diagonal, build_indexed_surface, build_joint_mesh,
+    compute_transform, finger_of, mano_faces, prepare_hand, track_color,
 };
 pub use hand_export::{
     HandExportError, HandExportRow, ManoParams, axis_angle_to_matrix, load_hand_export, parse_hand_export,

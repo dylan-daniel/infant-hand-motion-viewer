@@ -121,3 +121,17 @@ fn test_frame_image_names_that_are_not_frame_files_are_ignored() {
     assert_eq!(seq.frame_image_path(0), None, "empty and misnamed files must not match");
     let _ = std::fs::remove_dir_all(frames_dir);
 }
+
+#[test]
+fn test_hands_keep_the_camera_they_were_fitted_under() {
+    use infant_hand_motion_viewer::data::hand_export::load_hand_export;
+
+    let export = TempSyntheticExport::new("SYNTH_SUBJ", "SYNTH_TRIAL");
+    let row = &load_hand_export(&export.path).unwrap()[0];
+    let seq = MeshSequence::open(&export.path).unwrap();
+
+    let camera = seq.load_frame(0).unwrap()[0].camera.expect("camera is kept");
+    assert_eq!(camera.cam_t, row.params.cam_t);
+    assert_eq!(camera.focal_length, row.scaled_focal_length);
+    assert_eq!((camera.img_w, camera.img_h), (row.img_w as u32, row.img_h as u32));
+}

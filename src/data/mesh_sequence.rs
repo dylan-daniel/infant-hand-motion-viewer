@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use crate::data::geometry::HandData;
+use crate::data::geometry::{HandCamera, HandData};
 use crate::data::hand_export::{HandExportError, HandExportRow, load_hand_export, parse_hand_export};
 use crate::data::mano_model::mano_forward;
 
@@ -90,6 +90,12 @@ impl MeshSequence {
                 is_right: row.params.is_right,
                 hand_track_id: row.hand_track_id,
                 label: row.label.clone(),
+                camera: Some(HandCamera {
+                    cam_t: row.params.cam_t,
+                    focal_length: row.scaled_focal_length,
+                    img_w: row.img_w.max(0) as u32,
+                    img_h: row.img_h.max(0) as u32,
+                }),
             };
 
             let frame_num = row.frame;

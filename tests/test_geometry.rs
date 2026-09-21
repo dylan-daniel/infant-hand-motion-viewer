@@ -53,6 +53,7 @@ fn test_compute_transform_bounds() {
         is_right: true,
         hand_track_id: 0,
         label: "infant".into(),
+        camera: None,
     };
     let transform = compute_transform(&[hand]);
     assert!(transform.scale > 0.0);

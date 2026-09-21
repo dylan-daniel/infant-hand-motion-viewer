@@ -144,6 +144,7 @@ fn test_prepare_frame_logic() {
         is_right: true,
         hand_track_id: 2,
         label: "infant".to_string(),
+        camera: None,
     };
 
     // Standard mode: infant label passes
