@@ -217,3 +217,70 @@ fn test_plain_tooltip_in_a_zero_padding_window_has_no_padding() {
     let start = tooltip_content_start(|ui, record| ui.tooltip(record));
     assert_eq!(start, [0.0, 0.0]);
 }
+
+fn close(a: f32, b: f32) -> bool {
+    (a - b).abs() < 1e-3
+}
+
+#[test]
+fn test_slider_geometry_frames_round_trip_through_their_grab_positions() {
+    use infant_hand_motion_viewer::ui::SliderGeometry;
+
+    for frame_count in [2, 3, 50, 1000, 9000] {
+        let geometry = SliderGeometry::new(100.0, 900.0, frame_count, 10.0);
+        for frame in (0..frame_count).step_by((frame_count / 40).max(1)) {
+            assert_eq!(
+                geometry.frame_at(geometry.center_x(frame)),
+                frame,
+                "{frame_count} frames"
+            );
+        }
+        assert_eq!(geometry.frame_at(-1000.0), 0);
+        assert_eq!(geometry.frame_at(5000.0), frame_count - 1);
+    }
+}
+
+#[test]
+fn test_slider_flag_band_sits_exactly_under_the_grab_handle_for_its_frame() {
+    use infant_hand_motion_viewer::ui::SliderGeometry;
+
+    // 50 frames on an 800px track: the grab is wider than the style minimum, so it is exactly one frame wide.
+    let geometry = SliderGeometry::new(100.0, 900.0, 50, 10.0);
+    for frame in [0, 1, 17, 48, 49] {
+        let (left, right) = geometry.span(frame, frame);
+        let grab_left = geometry.center_x(frame) - geometry.grab_size() * 0.5;
+        let grab_right = geometry.center_x(frame) + geometry.grab_size() * 0.5;
+        assert!(
+            close(left, grab_left),
+            "frame {frame}: band starts at {left}, grab at {grab_left}"
+        );
+        assert!(
+            close(right, grab_right),
+            "frame {frame}: band ends at {right}, grab at {grab_right}"
+        );
+    }
+}
+
+#[test]
+fn test_slider_flag_runs_cover_their_frames_and_stay_on_the_track() {
+    use infant_hand_motion_viewer::ui::SliderGeometry;
+
+    let geometry = SliderGeometry::new(100.0, 900.0, 50, 10.0);
+    let (left, right) = geometry.span(0, 49);
+    assert!(left >= 100.0 && right <= 900.0);
+
+    // A run is exactly its first band's start to its last band's end.
+    let (run_left, run_right) = geometry.span(10, 20);
+    assert!(close(run_left, geometry.span(10, 10).0));
+    assert!(close(run_right, geometry.span(20, 20).1));
+    assert!(run_right > run_left);
+}
+
+#[test]
+fn test_slider_flag_band_is_visible_when_frames_are_denser_than_pixels() {
+    use infant_hand_motion_viewer::ui::SliderGeometry;
+
+    let geometry = SliderGeometry::new(0.0, 400.0, 9000, 10.0);
+    let (left, right) = geometry.span(4000, 4000);
+    assert!(right - left >= 1.0 - 1e-3, "band is {}px wide", right - left);
+}

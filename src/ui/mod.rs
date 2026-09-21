@@ -21,8 +21,8 @@ pub use image_view::{ImageViewResult, draw_image_window};
 pub use menu_bar::{MenuResult, MenuState, draw_menu_bar};
 pub use modals::draw_remote_modal;
 pub use transport::{
-    FLAG_COLORS, FLAG_LAYERS, FLAG_NAMES, FlagLayer, PLAYBACK_SPEEDS, Transport, TransportState, draw_transport_bar,
-    next_playback_speed,
+    FLAG_COLORS, FLAG_LAYERS, FLAG_NAMES, FlagLayer, PLAYBACK_SPEEDS, SliderGeometry, Transport, TransportState,
+    draw_transport_bar, next_playback_speed,
 };
 pub use viewport::{ViewportResult, draw_viewport_window};
 

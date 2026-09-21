@@ -127,23 +127,99 @@ pub struct TransportState {
     pub speed: f32,
 }
 
+/// Padding between the slider track and its grab handle, matching ImGui's own slider.
+const SLIDER_GRAB_PADDING: f32 = 2.0;
+
+/// Where frames sit along the scrubber. The grab handle is centered on its frame and only travels the track minus
+/// its own padding and half its width at each end, so every frame <-> x conversion (dragging, hovering, the grab
+/// itself and the flag bands) has to use this one mapping or they drift apart.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SliderGeometry {
+    track_min: f32,
+    track_max: f32,
+    grab_size: f32,
+    usable_min: f32,
+    usable_max: f32,
+    max_frame: usize,
+}
+
+impl SliderGeometry {
+    /// `track_min`/`track_max` are the track's x extent; `grab_min_size` is the style's minimum grab width.
+    pub fn new(track_min: f32, track_max: f32, frame_count: usize, grab_min_size: f32) -> Self {
+        let max_frame = frame_count.saturating_sub(1);
+        let slider_size = ((track_max - track_min) - SLIDER_GRAB_PADDING * 2.0).max(0.0);
+        let mut grab_size = grab_min_size;
+        if max_frame > 0 {
+            grab_size = grab_size.max(slider_size / (max_frame + 1) as f32);
+        }
+        grab_size = grab_size.min(slider_size);
+        Self {
+            track_min,
+            track_max,
+            grab_size,
+            usable_min: track_min + SLIDER_GRAB_PADDING + grab_size * 0.5,
+            usable_max: track_max - SLIDER_GRAB_PADDING - grab_size * 0.5,
+            max_frame,
+        }
+    }
+
+    pub fn frame_count(&self) -> usize {
+        self.max_frame + 1
+    }
+
+    pub fn grab_size(&self) -> f32 {
+        self.grab_size
+    }
+
+    /// The x of the grab handle's center when it sits on `frame`.
+    pub fn center_x(&self, frame: usize) -> f32 {
+        if self.usable_max > self.usable_min && self.max_frame > 0 {
+            let t = frame.min(self.max_frame) as f32 / self.max_frame as f32;
+            self.usable_min + (self.usable_max - self.usable_min) * t
+        } else {
+            self.usable_min
+        }
+    }
+
+    /// The frame whose grab position is nearest to `x`.
+    pub fn frame_at(&self, x: f32) -> usize {
+        if self.max_frame == 0 || self.usable_max <= self.usable_min {
+            return 0;
+        }
+        let t = ((x - self.usable_min) / (self.usable_max - self.usable_min)).clamp(0.0, 1.0);
+        ((t * self.max_frame as f32).round() as usize).min(self.max_frame)
+    }
+
+    /// The x extent covering frames `start..=end`: each frame owns the stretch around its grab position, so a
+    /// band lines up with the grab handle whenever it sits on one of its frames. At least one pixel wide.
+    pub fn span(&self, start: usize, end: usize) -> (f32, f32) {
+        let step = if self.max_frame > 0 && self.usable_max > self.usable_min {
+            (self.usable_max - self.usable_min) / self.max_frame as f32
+        } else {
+            self.track_max - self.track_min
+        };
+        let half = (step * 0.5).max(0.5);
+        (
+            (self.center_x(start) - half).max(self.track_min),
+            (self.center_x(end) + half).min(self.track_max),
+        )
+    }
+}
+
 /// Draws one filled rect per contiguous run of frames where flag layer is active.
 pub fn draw_flag_overlay(
     draw_list: &dear_imgui_rs::DrawListMut<'_>,
-    slider_min: [f32; 2],
-    slider_max: [f32; 2],
-    frame_count: usize,
+    geometry: &SliderGeometry,
+    band_top: f32,
+    band_bottom: f32,
     sequence: &MeshSequence,
     per_track_coloring: bool,
     flag_layers_enabled: [bool; 7],
 ) {
+    let frame_count = geometry.frame_count();
     if frame_count <= 1 {
         return;
     }
-    let band_top = slider_min[1];
-    let band_bottom = slider_max[1];
-    let width = slider_max[0] - slider_min[0];
-    let frame_to_x = |frame: usize| -> f32 { slider_min[0] + (frame as f32 / (frame_count - 1) as f32) * width };
 
     for (layer, flag_layer) in FLAG_LAYERS.iter().enumerate() {
         if !flag_layers_enabled[layer] {
@@ -167,8 +243,9 @@ pub fn draw_flag_overlay(
                     flag_layer.color[2],
                     flag_layer.color[3],
                 );
+                let (left, right) = geometry.span(start, end);
                 draw_list
-                    .add_rect([frame_to_x(start), band_top], [frame_to_x(end) + 1.0, band_bottom], col)
+                    .add_rect([left, band_top], [right, band_bottom], col)
                     .filled(true)
                     .build();
                 run_start = None;
@@ -196,21 +273,17 @@ fn draw_frame_slider(
     let hovered = ui.is_item_hovered();
 
     let max_frame = frame_count.saturating_sub(1);
-    let grab_padding = 2.0;
-    let slider_sz = (width - grab_padding * 2.0).max(0.0);
-    let grab_min_size = ui.clone_style().grab_min_size();
-    let mut grab_sz = grab_min_size;
-    if max_frame > 0 {
-        grab_sz = grab_sz.max(slider_sz / (max_frame + 1) as f32);
-    }
-    grab_sz = grab_sz.min(slider_sz);
-    let usable_pos_min = slider_min[0] + grab_padding + grab_sz * 0.5;
-    let usable_pos_max = slider_max[0] - grab_padding - grab_sz * 0.5;
+    let geometry = SliderGeometry::new(
+        slider_min[0],
+        slider_max[0],
+        frame_count,
+        ui.clone_style().grab_min_size(),
+    );
+    let grab_padding = SLIDER_GRAB_PADDING;
+    let grab_sz = geometry.grab_size();
 
-    if active && max_frame > 0 && usable_pos_max > usable_pos_min {
-        let mouse_x = ui.io().mouse_pos()[0];
-        let t = ((mouse_x - usable_pos_min) / (usable_pos_max - usable_pos_min)).clamp(0.0, 1.0);
-        *current_frame = ((t * max_frame as f32).round() as usize).min(max_frame);
+    if active && max_frame > 0 {
+        *current_frame = geometry.frame_at(ui.io().mouse_pos()[0]);
     }
 
     let track_color = if active {
@@ -230,25 +303,16 @@ fn draw_frame_slider(
     if let Some(seq) = transport.sequence {
         draw_flag_overlay(
             draw_list,
-            slider_min,
-            slider_max,
-            frame_count,
+            &geometry,
+            slider_min[1],
+            slider_max[1],
             seq,
             transport.per_track_coloring,
             transport.flag_layers_enabled,
         );
     }
 
-    let t = if max_frame > 0 {
-        *current_frame as f32 / max_frame as f32
-    } else {
-        0.0
-    };
-    let grab_center_x = if usable_pos_max > usable_pos_min {
-        usable_pos_min + (usable_pos_max - usable_pos_min) * t
-    } else {
-        usable_pos_min
-    };
+    let grab_center_x = geometry.center_x(*current_frame);
     let grab_min = [grab_center_x - grab_sz * 0.5, slider_min[1] + grab_padding];
     let grab_max = [grab_center_x + grab_sz * 0.5, slider_max[1] - grab_padding];
     let grab_color = if active {
@@ -264,9 +328,7 @@ fn draw_frame_slider(
         .build();
 
     if hovered && transport.sequence.is_some() && max_frame > 0 {
-        let mouse_x = ui.io().mouse_pos()[0];
-        let t_hover = ((mouse_x - usable_pos_min) / (usable_pos_max - usable_pos_min)).clamp(0.0, 1.0);
-        let hover_frame = ((t_hover * max_frame as f32).round() as usize).min(max_frame);
+        let hover_frame = geometry.frame_at(ui.io().mouse_pos()[0]);
 
         if let Some(seq) = transport.sequence {
             let mut active_layers = Vec::new();
