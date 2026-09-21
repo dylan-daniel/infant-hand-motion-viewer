@@ -192,3 +192,27 @@ fn test_frame_gpu_hand_matrix() {
     let p = mat.transform_point3(Vec3::ZERO);
     assert_eq!(p, Vec3::new(2.0, 4.0, 6.0));
 }
+
+#[test]
+fn test_hand_matrix_depth_scale_keeps_the_translation() {
+    let transform = Transform {
+        translate: Vec3::new(1.0, 2.0, 3.0),
+        scale: 4.0,
+    };
+
+    for depth_scale in [0.5_f32, 1.0, 2.0] {
+        let model = FrameGpu::hand_matrix(Some(&transform), depth_scale);
+
+        // The local origin lands where the frame transform puts it, whatever the depth scale is.
+        let origin = model.transform_point3(Vec3::ZERO);
+        assert!(
+            (origin - Vec3::new(4.0, 8.0, 12.0)).length() < 1e-5,
+            "origin moved: {origin}"
+        );
+
+        // Only the mesh itself is scaled about that origin.
+        let point = model.transform_point3(Vec3::X);
+        let expected = origin + Vec3::X * transform.scale * depth_scale;
+        assert!((point - expected).length() < 1e-5, "mesh scale wrong: {point}");
+    }
+}

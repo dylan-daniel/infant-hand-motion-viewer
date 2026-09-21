@@ -125,7 +125,7 @@ impl FrameGpu {
             model = Mat4::from_scale(Vec3::splat(t.scale)) * Mat4::from_translation(t.translate);
         }
         if scale != 1.0 {
-            model = Mat4::from_scale(Vec3::splat(scale)) * model;
+            model *= Mat4::from_scale(Vec3::splat(scale));
         }
         model
     }
