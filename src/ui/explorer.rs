@@ -379,93 +379,134 @@ impl FileExplorer {
             ui.set_next_window_dock_id_with_cond(did, Condition::FirstUseEver);
         }
 
-        let mut window = dear_imgui_rs::Window::new(ui, "Explorer###Explorer");
-        window = window.flags(WindowFlags::empty());
+        let window = dear_imgui_rs::Window::new(ui, "Explorer###Explorer")
+            .flags(WindowFlags::NO_SCROLLBAR | WindowFlags::NO_SCROLL_WITH_MOUSE);
 
         window.build(|| {
             result.hovered = ui.is_window_hovered();
             result.focused = ui.is_window_focused();
 
-            // Toolbar
-            if self.mode == SourceMode::Local {
-                if let Some(tex) = icons.change_root {
-                    if ui.image_button("##change_root", tex, [18.0, 18.0]) {
-                        result.choose_root_requested = true;
-                    }
-                    if ui.is_item_hovered() {
-                        ui.tooltip(|| {
-                            ui.text("Choose Data Folder");
-                        });
-                    }
-                    ui.same_line();
-                } else if ui.button("Folder...") {
-                    result.choose_root_requested = true;
-                }
-            } else {
-                if let Some(tex) = icons.change_root {
-                    if ui.image_button("##change_remote", tex, [18.0, 18.0]) {
-                        result.change_remote_requested = true;
-                    }
-                    if ui.is_item_hovered() {
-                        ui.tooltip(|| {
-                            ui.text("Change Remote Settings");
-                        });
-                    }
-                    ui.same_line();
-                } else if ui.button("Remote...") {
-                    result.change_remote_requested = true;
-                }
-            }
-
-            if let Some(tex) = icons.refresh {
-                if ui.image_button("##refresh", tex, [18.0, 18.0]) {
-                    self.refresh();
-                }
-                if ui.is_item_hovered() {
-                    ui.tooltip(|| {
-                        ui.text("Refresh");
-                    });
-                }
-            } else if ui.button("Refresh") {
-                self.refresh();
-            }
-
+            let is_remote = self.mode == SourceMode::Remote;
+            let scanning = self.scanning();
+            self.draw_toolbar(ui, icons, &mut result, is_remote, scanning);
             ui.separator();
 
-            if self.scanning() {
-                ui.text("Scanning directory...");
-                return;
-            }
-
-            if !self.scan_error.is_empty() {
-                ui.text_colored([1.0, 0.4, 0.4, 1.0], &self.scan_error);
-                return;
-            }
-
-            let is_remote = self.mode == SourceMode::Remote;
-            self.live_open.clear();
-
-            if let Some(node) = self.root_node.clone() {
-                let mut draw = TreeDraw {
-                    icons,
-                    is_remote,
-                    result: &mut result,
-                    live_open: &mut self.live_open,
-                    saved_open: &self.saved_open,
-                    row_left: ui.cursor_screen_pos()[0],
-                    row_width: ui.content_region_avail()[0],
-                    row_index: 0,
-                };
-                Self::draw_node(ui, &node, &mut draw);
-            } else {
-                ui.text_colored(
-                    [0.6, 0.6, 0.6, 1.0],
-                    "No data folder selected.\nClick 'Folder...' above to choose one.",
-                );
-            }
+            ui.child_window("##tree_scroll")
+                .flags(WindowFlags::HORIZONTAL_SCROLLBAR)
+                .build(ui, || {
+                    self.live_open.clear();
+                    if let Some(node) = self.root_node.clone() {
+                        let mut draw = TreeDraw {
+                            icons,
+                            is_remote,
+                            result: &mut result,
+                            live_open: &mut self.live_open,
+                            saved_open: &self.saved_open,
+                            row_left: ui.cursor_screen_pos()[0],
+                            row_width: ui.content_region_avail()[0],
+                            row_index: 0,
+                        };
+                        Self::draw_node(ui, &node, &mut draw);
+                    } else if scanning {
+                        ui.text_disabled(if is_remote {
+                            "Scanning remote server..."
+                        } else {
+                            "Scanning..."
+                        });
+                    } else if !self.scan_error.is_empty() {
+                        ui.text_colored([1.0, 0.4, 0.4, 1.0], format!("Scan error: {}", self.scan_error));
+                    } else if is_remote {
+                        ui.text_disabled("No .hexport files found on remote server.");
+                    } else if self.root_path.is_empty() {
+                        ui.text_disabled("No data folder selected.\nClick the folder button above to choose one.");
+                    } else {
+                        ui.text_disabled("No .hexport files found.");
+                    }
+                });
         });
 
         result
+    }
+
+    /// Path label (`<path>` or `<host>:<path>`, clipped to the space left of the buttons) with change and refresh buttons on the right.
+    fn draw_toolbar(&mut self, ui: &Ui, icons: &UiIcons, result: &mut ExplorerResult, is_remote: bool, scanning: bool) {
+        let style = ui.clone_style();
+        let icon = ui.current_font_size();
+        let button_width = icon + style.frame_padding()[0] * 2.0;
+        let buttons_width = button_width * 2.0 + style.item_spacing()[0];
+
+        let row_start = ui.cursor_pos();
+        let region_width = ui.content_region_avail()[0];
+
+        let label = if is_remote {
+            let host = self.remote_client.as_ref().map(|c| c.config().host).unwrap_or_default();
+            if host.is_empty() {
+                self.remote_root_path.clone()
+            } else {
+                format!("{host}:{}", self.remote_root_path)
+            }
+        } else {
+            self.root_path.clone()
+        };
+
+        ui.align_text_to_frame_padding();
+        let text_width = (region_width - buttons_width - style.item_spacing()[0]).max(0.0);
+        let text_pos = ui.cursor_screen_pos();
+        {
+            let _clip = ui.push_clip_rect(
+                text_pos,
+                [text_pos[0] + text_width, text_pos[1] + ui.frame_height()],
+                true,
+            );
+            ui.text_disabled(&label);
+        }
+
+        ui.set_cursor_pos([row_start[0] + region_width - buttons_width, row_start[1]]);
+        let (change_id, change_tip, change_fallback) = if is_remote {
+            ("change_remote", "Change remote server / folder", "Change##remote")
+        } else {
+            ("change_root", "Change data folder", "Change")
+        };
+        let tint = ui.style_color(StyleColor::Text);
+        let change_clicked = match icons.change_root {
+            Some(tex) => ui
+                .image_button_config(change_id, tex, [icon, icon])
+                .bg_color([0.0; 4])
+                .tint_color(tint)
+                .build(),
+            None => ui.button(change_fallback),
+        };
+        if change_clicked {
+            if is_remote {
+                result.change_remote_requested = true;
+            } else {
+                result.choose_root_requested = true;
+            }
+        }
+        if ui.is_item_hovered() {
+            ui.tooltip_text(change_tip);
+        }
+
+        ui.same_line();
+        let refresh_id = if is_remote { "refresh_remote" } else { "refresh_root" };
+        let refresh_clicked = ui.with_disabled_if(scanning, || match icons.refresh {
+            Some(tex) => ui
+                .image_button_config(refresh_id, tex, [icon, icon])
+                .bg_color([0.0; 4])
+                .tint_color(tint)
+                .build(),
+            None => ui.button("Refresh"),
+        });
+        if refresh_clicked {
+            self.refresh();
+        }
+        if ui.is_item_hovered_with_flags(dear_imgui_rs::ItemHoveredFlags::ALLOW_WHEN_DISABLED) {
+            ui.tooltip_text(if is_remote {
+                "Rescan remote folder"
+            } else {
+                "Rescan this folder"
+            });
+        }
     }
 
     /// Paint the alternating row background behind the row about to be drawn, spanning the full content width.

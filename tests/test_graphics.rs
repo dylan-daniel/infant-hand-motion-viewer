@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
 use glam::Vec3;
+use image::{ImageBuffer, Rgba};
 use infant_hand_motion_viewer::data::HandData;
 use infant_hand_motion_viewer::data::geometry::Transform;
 use infant_hand_motion_viewer::graphics::{Camera, FrameGpu, FreeCamera, ImageTexture, OrbitCamera, prepare_frame};
-use image::{ImageBuffer, Rgba};
 
 struct TempFileGuard(PathBuf);
 

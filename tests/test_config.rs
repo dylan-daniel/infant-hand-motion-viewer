@@ -108,5 +108,8 @@ fn test_config_save_creates_missing_parent_dirs() {
 fn test_default_config_path_is_in_hidden_home_dir() {
     let path = Config::default_config_path();
     assert_eq!(path.file_name().unwrap(), "config.json");
-    assert_eq!(path.parent().unwrap().file_name().unwrap(), ".infant-hand-motion-viewer");
+    assert_eq!(
+        path.parent().unwrap().file_name().unwrap(),
+        ".infant-hand-motion-viewer"
+    );
 }
