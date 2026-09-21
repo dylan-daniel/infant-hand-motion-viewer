@@ -104,7 +104,7 @@ pub fn draw_menu_bar(ui: &Ui, mut state: MenuState) -> MenuResult {
             });
         });
 
-        // Right-aligned path of the open sequence folder
+        // Right-aligned path of the open sequence folder, clipped after the menus so the left is cut
         if !state.open_file.is_empty() {
             let window_pos = ui.window_pos();
             let window_width = ui.window_width();
@@ -124,6 +124,11 @@ pub fn draw_menu_bar(ui: &Ui, mut state: MenuState) -> MenuResult {
                     (disabled_col[1] * 255.0) as u8,
                     (disabled_col[2] * 255.0) as u8,
                     (disabled_col[3] * 255.0) as u8,
+                );
+                let _clip = draw_list.push_clip_rect(
+                    [region_left, window_pos[1]],
+                    [region_right, window_pos[1] + window_height],
+                    true,
                 );
                 draw_list.add_text([text_x, text_y], col, path);
             }
