@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, Ordering as AtomicOrdering},
+    atomic::{AtomicU64, AtomicUsize, Ordering as AtomicOrdering},
 };
 
 use dear_imgui_rs::{Condition, Id, StyleColor, TextureId, Ui, WindowFlags};
@@ -93,7 +93,8 @@ pub struct FileExplorer {
     saved_open: HashSet<String>,
     live_open: HashSet<String>,
 
-    scanning: Arc<AtomicBool>,
+    in_flight: Arc<AtomicUsize>,
+    latest_scan: Arc<AtomicU64>,
     ready_root: Arc<Mutex<Option<Result<ExplorerNode, String>>>>,
     worker: Arc<WorkerQueue>,
 }
@@ -111,7 +112,8 @@ impl FileExplorer {
             saved_open: HashSet::new(),
             live_open: HashSet::new(),
 
-            scanning: Arc::new(AtomicBool::new(false)),
+            in_flight: Arc::new(AtomicUsize::new(0)),
+            latest_scan: Arc::new(AtomicU64::new(0)),
             ready_root: Arc::new(Mutex::new(None)),
             worker: Arc::new(WorkerQueue::new()),
         }
@@ -124,6 +126,8 @@ impl FileExplorer {
     pub fn set_mode(&mut self, mode: SourceMode) {
         if self.mode != mode {
             self.mode = mode;
+            self.root_node = None;
+            self.scan_error.clear();
             self.refresh();
         }
     }
@@ -147,11 +151,14 @@ impl FileExplorer {
 
     pub fn set_remote_root(&mut self, root: &str) {
         self.remote_root_path = root.to_string();
+        if self.mode == SourceMode::Remote {
+            self.root_node = None;
+        }
         self.refresh();
     }
 
     pub fn scanning(&self) -> bool {
-        self.scanning.load(AtomicOrdering::SeqCst)
+        self.in_flight.load(AtomicOrdering::SeqCst) > 0
     }
 
     pub fn scan_error(&self) -> &str {
@@ -166,51 +173,52 @@ impl FileExplorer {
         self.live_open.iter().cloned().collect()
     }
 
+    /// Rescan the current source. A newer refresh supersedes any scan still running, so its result is dropped.
     pub fn refresh(&mut self) {
-        if self.scanning() {
-            return;
-        }
-
         let mode = self.mode;
         let root = self.root_path().to_string();
+        let scan_id = self.latest_scan.fetch_add(1, AtomicOrdering::SeqCst) + 1;
+        *self.ready_root.lock().unwrap() = None;
         if root.is_empty() {
             self.root_node = None;
             self.scan_error.clear();
             return;
         }
 
-        self.scanning.store(true, AtomicOrdering::SeqCst);
-        let scanning = Arc::clone(&self.scanning);
+        self.in_flight.fetch_add(1, AtomicOrdering::SeqCst);
+        let in_flight = Arc::clone(&self.in_flight);
+        let latest_scan = Arc::clone(&self.latest_scan);
         let ready = Arc::clone(&self.ready_root);
         let client = self.remote_client.clone();
 
         self.worker.submit(move || {
-            let res = match mode {
-                SourceMode::Local => {
-                    let path = Path::new(&root);
-                    if path.is_dir() {
-                        Ok(Self::scan_root(path))
-                    } else {
-                        Err(format!("Directory not found: {root}"))
-                    }
-                }
-                SourceMode::Remote => {
-                    if let Some(c) = client {
-                        if c.is_connected() {
-                            c.scan_tree(&root)
+            let res = if latest_scan.load(AtomicOrdering::SeqCst) != scan_id {
+                None
+            } else {
+                Some(match mode {
+                    SourceMode::Local => {
+                        let path = Path::new(&root);
+                        if path.is_dir() {
+                            Ok(Self::scan_root(path))
                         } else {
-                            Err("Not connected to remote server".to_string())
+                            Err(format!("Directory not found: {root}"))
                         }
-                    } else {
-                        Err("No remote client configured".to_string())
                     }
-                }
+                    SourceMode::Remote => match client {
+                        Some(c) if c.is_connected() => c.scan_tree(&root),
+                        Some(_) => Err("Not connected to remote server".to_string()),
+                        None => Err("No remote client configured".to_string()),
+                    },
+                })
             };
 
-            if let Ok(mut lock) = ready.lock() {
+            if let Some(res) = res
+                && latest_scan.load(AtomicOrdering::SeqCst) == scan_id
+                && let Ok(mut lock) = ready.lock()
+            {
                 *lock = Some(res);
             }
-            scanning.store(false, AtomicOrdering::SeqCst);
+            in_flight.fetch_sub(1, AtomicOrdering::SeqCst);
         });
     }
 
