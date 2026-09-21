@@ -1,11 +1,12 @@
-use dear_imgui_rs::{Condition, Key, Ui, WindowFlags, sys};
+use dear_imgui_rs::{Condition, Key, StyleColor, Ui, WindowFlags, sys};
 
 use crate::remote::{CacheManager, ConnectionState, RemoteClient, RemoteConfig};
 
-const MODAL_WIDTH: f32 = 540.0;
+const STORAGE_MODAL_WIDTH: f32 = 540.0;
+const REMOTE_MODAL_WIDTH: f32 = 720.0;
 
 /// Center the next modal on the main viewport at a fixed width that auto-fits its height.
-fn setup_modal_window(ui: &Ui) {
+fn setup_modal_window(ui: &Ui, width: f32) {
     let center = ui.main_viewport().center();
     unsafe {
         sys::igSetNextWindowPos(
@@ -16,13 +17,10 @@ fn setup_modal_window(ui: &Ui) {
             Condition::Appearing as i32,
             sys::ImVec2 { x: 0.5, y: 0.5 },
         );
-        sys::igSetNextWindowSize(sys::ImVec2 { x: MODAL_WIDTH, y: 0.0 }, Condition::Always as i32);
+        sys::igSetNextWindowSize(sys::ImVec2 { x: width, y: 0.0 }, Condition::Always as i32);
         sys::igSetNextWindowSizeConstraints(
-            sys::ImVec2 { x: MODAL_WIDTH, y: 0.0 },
-            sys::ImVec2 {
-                x: MODAL_WIDTH,
-                y: 2000.0,
-            },
+            sys::ImVec2 { x: width, y: 0.0 },
+            sys::ImVec2 { x: width, y: 2000.0 },
             None,
             std::ptr::null_mut(),
         );
@@ -30,14 +28,14 @@ fn setup_modal_window(ui: &Ui) {
 }
 
 /// Open and draw a fixed, non-movable modal; `body` returns true when it wants the modal closed.
-fn draw_modal(ui: &Ui, name: &str, is_open: &mut bool, body: impl FnOnce() -> bool) {
+fn draw_modal(ui: &Ui, name: &str, width: f32, is_open: &mut bool, body: impl FnOnce() -> bool) {
     if !*is_open {
         return;
     }
     if !ui.is_popup_open(name) {
         ui.open_popup(name);
     }
-    setup_modal_window(ui);
+    setup_modal_window(ui, width);
 
     let mut close = false;
     let token = ui
@@ -59,18 +57,24 @@ fn draw_modal(ui: &Ui, name: &str, is_open: &mut bool, body: impl FnOnce() -> bo
 
 /// Draw the centered modal dialog for SSH / remote daemon configuration.
 pub fn draw_remote_modal(ui: &Ui, is_open: &mut bool, config: &mut RemoteConfig, client: &RemoteClient) {
-    draw_modal(ui, "Connect to Remote Server", is_open, || {
+    draw_modal(ui, "Connect to Remote Server", REMOTE_MODAL_WIDTH, is_open, || {
         let mut close = false;
         ui.text("Remote SSH Daemon Connection");
         ui.separator();
 
-        ui.input_text("Host / Alias", &mut config.host).build();
+        ui.input_text("Host / Alias", &mut config.host)
+            .hint("user@hostname or ssh-config-alias")
+            .build();
         let mut port_i32 = config.port as i32;
         if ui.input_int("Port", &mut port_i32) {
             config.port = port_i32.clamp(1, 65535) as u16;
         }
-        ui.input_text("Python Binary", &mut config.python_bin).build();
-        ui.input_text("Remote Root Folder", &mut config.root_folder).build();
+        ui.input_text("Python Binary", &mut config.python_bin)
+            .hint("python3")
+            .build();
+        ui.input_text("Remote Root Folder", &mut config.root_folder)
+            .hint("/path/to/data")
+            .build();
 
         ui.separator();
 
@@ -90,21 +94,14 @@ pub fn draw_remote_modal(ui: &Ui, is_open: &mut bool, config: &mut RemoteConfig,
 
         let last_err = client.last_error();
         if !last_err.is_empty() {
-            ui.text_colored([1.0, 0.4, 0.4, 1.0], &last_err);
+            let _col = ui.push_style_color(StyleColor::Text, [1.0, 0.4, 0.4, 1.0]);
+            ui.text_wrapped(&last_err);
         }
 
         ui.separator();
 
-        if ui.button("Test Connection") {
-            let _ = client.connect_sync(config);
-        }
-        ui.same_line();
-        if ui.button("Connect") {
+        if ui.button_with_size("Connect", [ui.content_region_avail()[0], 0.0]) {
             client.connect_async(config.clone());
-            close = true;
-        }
-        ui.same_line();
-        if ui.button("Cancel") {
             close = true;
         }
         close
@@ -113,7 +110,7 @@ pub fn draw_remote_modal(ui: &Ui, is_open: &mut bool, config: &mut RemoteConfig,
 
 /// Draw the centered modal dialog for local disk storage and cache configuration.
 pub fn draw_storage_modal(ui: &Ui, is_open: &mut bool, cache_folder: &mut String, browse_requested: &mut bool) {
-    draw_modal(ui, "Storage & Cache Settings", is_open, || {
+    draw_modal(ui, "Storage & Cache Settings", STORAGE_MODAL_WIDTH, is_open, || {
         ui.text("Local File & Cache Management");
         ui.separator();
 
