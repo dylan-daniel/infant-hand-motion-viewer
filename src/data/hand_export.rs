@@ -158,6 +158,12 @@ pub fn load_hand_export<P: AsRef<Path>>(export_path: P) -> Result<Vec<HandExport
         source: e,
     })?;
 
+    parse_hand_export(&raw, &path_str)
+}
+
+/// Parses the bytes of a `.hexport` file; `source` names where they came from, for error messages.
+pub fn parse_hand_export(raw: &[u8], source: &str) -> Result<Vec<HandExportRow>, HandExportError> {
+    let path_str = source.to_string();
     if raw.len() < HEADER_SIZE || raw[0..4] != MAGIC {
         return Err(HandExportError::InvalidMagic(path_str));
     }

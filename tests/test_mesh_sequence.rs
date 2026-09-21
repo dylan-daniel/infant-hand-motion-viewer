@@ -33,3 +33,24 @@ fn test_synthetic_mesh_sequence_loading() {
     assert!(!seq.is_flagged(0, 0, true));
     assert!(!seq.is_flagged(0, 0, false));
 }
+
+#[test]
+fn test_mesh_sequence_from_bytes_matches_open() {
+    let export = TempSyntheticExport::new("SYNTH_SUBJ", "SYNTH_TRIAL");
+    let raw = std::fs::read(&export.path).unwrap();
+
+    let from_file = MeshSequence::open(&export.path).unwrap();
+    let from_memory = MeshSequence::from_bytes("host:/remote/export.hexport", &raw).unwrap();
+
+    assert_eq!(from_memory.path(), "host:/remote/export.hexport");
+    assert_eq!(from_memory.frame_count(), from_file.frame_count());
+    assert_eq!(from_memory.frame_numbers(), from_file.frame_numbers());
+    assert_eq!(from_memory.hand_count(0), from_file.hand_count(0));
+    assert_eq!(from_memory.frame_image_path(0), None);
+}
+
+#[test]
+fn test_mesh_sequence_from_bytes_rejects_garbage() {
+    assert!(MeshSequence::from_bytes("garbage", b"not a hexport").is_err());
+    assert!(MeshSequence::from_bytes("empty", &[]).is_err());
+}

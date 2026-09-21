@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::data::geometry::HandData;
-use crate::data::hand_export::{HandExportError, load_hand_export};
+use crate::data::hand_export::{HandExportError, HandExportRow, load_hand_export, parse_hand_export};
 use crate::data::mano_model::mano_forward;
 
 pub const FLAG_LAYER_COUNT: usize = 7;
@@ -65,7 +65,17 @@ impl MeshSequence {
         let frames_dir = resolve_frames_dir(&path_buf);
 
         let rows = load_hand_export(&path_buf)?;
+        Ok(Self::from_rows(path_str, frames_dir, rows))
+    }
 
+    /// Builds a sequence from the bytes of a `.hexport` file held in memory. `label` identifies the source
+    /// (for example the remote path) and no local frame images are looked up.
+    pub fn from_bytes(label: &str, raw: &[u8]) -> Result<Self, HandExportError> {
+        let rows = parse_hand_export(raw, label)?;
+        Ok(Self::from_rows(label.to_string(), PathBuf::new(), rows))
+    }
+
+    fn from_rows(path_str: String, frames_dir: PathBuf, rows: Vec<HandExportRow>) -> Self {
         let mut by_frame: BTreeMap<i32, Frame> = BTreeMap::new();
         let mut flags_all_by_frame: BTreeMap<i32, [bool; FLAG_LAYER_COUNT]> = BTreeMap::new();
         let mut flags_infant_by_frame: BTreeMap<i32, [bool; FLAG_LAYER_COUNT]> = BTreeMap::new();
@@ -121,14 +131,14 @@ impl MeshSequence {
             frames.push(hands);
         }
 
-        Ok(Self {
+        Self {
             path: path_str,
             frames_dir,
             frames,
             frame_numbers,
             frame_flags_all,
             frame_flags_infant_only,
-        })
+        }
     }
 
     pub fn frame_count(&self) -> usize {
@@ -175,6 +185,9 @@ impl MeshSequence {
     pub fn frame_image_path(&self, index: usize) -> Option<PathBuf> {
         let frame_num = self.frame_number(index)?;
         let frames_path = &self.frames_dir;
+        if frames_path.as_os_str().is_empty() {
+            return None;
+        }
 
         let formats = [
             format!("frame_{frame_num:05}.jpg"),
