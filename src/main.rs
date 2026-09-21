@@ -132,6 +132,8 @@ struct AppState {
     // Native file dialogs
     dialogs: DialogChannels,
     pending_open_file: Option<PendingOpen>,
+    /// Remote file (host, path, frame) to reopen once the saved connection is back up.
+    pending_remote_restore: Option<(String, String, usize)>,
 
     // Timing
     last_frame_time: Instant,
@@ -468,10 +470,21 @@ impl ApplicationHandler for AppRunner {
             active_sequence_id: Arc::new(AtomicU64::new(0)),
             dialogs: DialogChannels::new(),
             pending_open_file: None,
+            pending_remote_restore: None,
             last_frame_time: Instant::now(),
         };
 
         if let Some(last_folder) = app_state.settings.last_folder.clone()
+            && app_state.settings.last_folder_remote
+        {
+            if app_state.settings.remote_mode {
+                app_state.pending_remote_restore = Some((
+                    app_state.settings.remote_host.clone(),
+                    last_folder,
+                    app_state.settings.last_frame,
+                ));
+            }
+        } else if let Some(last_folder) = app_state.settings.last_folder.clone()
             && Path::new(&last_folder).is_file()
         {
             let start_frame = app_state.settings.last_frame;
@@ -647,6 +660,7 @@ impl ApplicationHandler for AppRunner {
 fn persist_settings(state: &mut AppState) {
     if let Some(ref seq) = state.sequence {
         state.settings.last_folder = Some(seq.path().to_string());
+        state.settings.last_folder_remote = !state.current_remote_path.is_empty();
         state.settings.last_frame = state.current_frame;
     }
     state.settings.active_pane = state.active_pane;
@@ -729,7 +743,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         let remote = state.remote_client.config();
         state.remote_config = remote.clone();
         state.settings.remote_mode = true;
-        state.settings.remote_host = remote.host;
+        state.settings.remote_host = remote.host.clone();
         state.settings.remote_port = remote.port;
         state.settings.remote_python = remote.python_bin;
         state.settings.remote_data_folder = remote.root_folder.clone();
@@ -738,6 +752,12 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         state.explorer.set_remote_root(&remote.root_folder);
         state.explorer.set_mode(SourceMode::Remote);
         state.explorer.refresh();
+
+        if let Some((host, path, frame)) = state.pending_remote_restore.take()
+            && host == remote.host
+        {
+            state.request_remote_open(path, frame);
+        }
     }
     if matches!(
         state.remote_client.state(),

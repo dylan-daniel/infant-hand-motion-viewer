@@ -51,6 +51,8 @@ pub struct Config {
     #[serde(default)]
     pub last_folder: Option<String>,
     #[serde(default)]
+    pub last_folder_remote: bool,
+    #[serde(default)]
     pub last_frame: usize,
     #[serde(default = "default_playback_speed")]
     pub playback_speed: f32,
@@ -117,6 +119,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             last_folder: None,
+            last_folder_remote: false,
             last_frame: 0,
             playback_speed: default_playback_speed(),
             hand_translucent: default_true(),
