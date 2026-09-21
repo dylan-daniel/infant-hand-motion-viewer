@@ -7,6 +7,9 @@ pub struct MenuState {
     pub show_camera_marker: bool,
     pub free_camera: bool,
     pub per_track_coloring: bool,
+    /// Multisample count in use (1 = off) and the counts the GPU offers, for the Anti-Aliasing submenu.
+    pub msaa_samples: u32,
+    pub msaa_options: Vec<u32>,
     pub open_file: String,
     pub remote_connected: bool,
 }
@@ -75,6 +78,20 @@ pub fn draw_menu_bar(ui: &Ui, mut state: MenuState) -> MenuResult {
                     );
                 });
             }
+            ui.separator();
+            let options = state.msaa_options.clone();
+            ui.menu("Anti-Aliasing", || {
+                for samples in options {
+                    let label = if samples == 1 {
+                        "Off".to_string()
+                    } else {
+                        format!("{samples}x MSAA")
+                    };
+                    if ui.menu_item_enabled_selected_no_shortcut(label, samples == state.msaa_samples, true) {
+                        state.msaa_samples = samples;
+                    }
+                }
+            });
         });
 
         // Right-aligned path of the open sequence folder

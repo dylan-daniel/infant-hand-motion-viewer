@@ -966,6 +966,8 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         show_camera_marker: state.settings.show_camera_marker,
         free_camera: state.settings.free_camera,
         per_track_coloring: state.settings.per_track_coloring,
+        msaa_samples: state.renderer.sample_count(),
+        msaa_options: state.gpu.msaa_counts.clone(),
         open_file: open_file_label,
         remote_connected: state.remote_client.is_connected(),
     };
@@ -1084,6 +1086,13 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
     state.viewport_hovered = viewport_result.hovered;
     state.settings.hand_translucent = menu_result.state.hand_translucent;
     state.settings.show_camera_marker = menu_result.state.show_camera_marker;
+    if menu_result.state.msaa_samples != state.renderer.sample_count() {
+        // Switch live: rebuild the pipelines and the multisampled targets together so they always agree
+        let samples = state.gpu.resolve_sample_count(menu_result.state.msaa_samples);
+        state.renderer.set_sample_count(&state.gpu, samples);
+        state.framebuffer.set_sample_count(&state.gpu, samples);
+        state.settings.msaa_samples = samples;
+    }
     if menu_result.state.free_camera != state.camera_is_free {
         state.update_camera_mode(menu_result.state.free_camera);
     }
