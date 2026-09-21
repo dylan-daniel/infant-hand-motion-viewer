@@ -233,11 +233,15 @@ fn test_pick_sample_count_uses_the_highest_supported_not_above_the_request() {
 /// A GPU device on whatever adapter the machine has (a software one is fine), or `None` when there is none.
 fn headless_gpu() -> Option<infant_hand_motion_viewer::graphics::Gpu> {
     use dear_imgui_wgpu::wgpu;
-    use infant_hand_motion_viewer::graphics::{Gpu, supported_sample_counts};
+    use infant_hand_motion_viewer::graphics::{Gpu, required_device_features, supported_sample_counts};
 
     let instance = wgpu::Instance::default();
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        required_features: required_device_features(&adapter),
+        ..Default::default()
+    }))
+    .ok()?;
     Some(Gpu {
         device,
         queue,

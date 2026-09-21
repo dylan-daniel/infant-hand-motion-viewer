@@ -23,9 +23,22 @@ impl Gpu {
     }
 }
 
-/// The multisample counts `adapter` can render the scene with (both the color and depth formats must allow the
-/// count, and the color format must be able to resolve).
+/// Multisample counts every WebGPU device guarantees for the scene formats.
+const GUARANTEED_MSAA_COUNTS: [u32; 2] = [1, 4];
+
+/// The device features to request from `adapter`. Without `TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES` a device is
+/// limited to the guaranteed multisample counts even when the adapter could do more.
+pub fn required_device_features(adapter: &wgpu::Adapter) -> wgpu::Features {
+    adapter.features() & wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+}
+
+/// The multisample counts a device created with [`required_device_features`] can render the scene with. Only the
+/// guaranteed counts are offered unless the adapter-specific format features are available; beyond that, both the
+/// color and depth formats must allow the count and the color format must be able to resolve.
 pub fn supported_sample_counts(adapter: &wgpu::Adapter) -> Vec<u32> {
+    if required_device_features(adapter).is_empty() {
+        return GUARANTEED_MSAA_COUNTS.to_vec();
+    }
     let color = adapter.get_texture_format_features(COLOR_FORMAT);
     let depth = adapter.get_texture_format_features(DEPTH_FORMAT);
     MSAA_CANDIDATES

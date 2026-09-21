@@ -22,7 +22,7 @@ use infant_hand_motion_viewer::config::Config;
 use infant_hand_motion_viewer::data::{MeshSequence, Transform, compute_transform, reference_depth};
 use infant_hand_motion_viewer::graphics::{
     Camera, FrameGpu, Framebuffer, FreeCamera, Gpu, ImageTexture, OrbitCamera, Renderer, SceneRender, prepare_frame,
-    supported_sample_counts,
+    required_device_features, supported_sample_counts,
 };
 use infant_hand_motion_viewer::remote::{ConnectionState, FrameStream, RemoteClient, RemoteConfig};
 use infant_hand_motion_viewer::ui::{
@@ -303,6 +303,7 @@ impl ApplicationHandler for AppRunner {
         .expect("failed to find a suitable GPU adapter");
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("infant hand motion viewer"),
+            required_features: required_device_features(&adapter),
             ..Default::default()
         }))
         .expect("failed to create GPU device");
