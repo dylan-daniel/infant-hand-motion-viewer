@@ -628,11 +628,7 @@ impl FileExplorer {
                 draw.result.is_remote = draw.is_remote;
             }
         } else {
-            let should_open = draw
-                .open_state
-                .get(&node.path)
-                .copied()
-                .unwrap_or(depth <= DEFAULT_OPEN_DEPTH);
+            let should_open = draw.open_state.get(&node.path).copied().unwrap_or(depth == 0);
 
             let node_token = ui
                 .tree_node_config(&node.path)
@@ -687,9 +683,6 @@ impl FileExplorer {
         );
     }
 }
-
-/// Folders at or above this depth (the root is 0) start expanded unless the user's saved state says otherwise.
-const DEFAULT_OPEN_DEPTH: usize = 1;
 
 /// State shared by every node in one frame's tree walk.
 struct TreeDraw<'a> {
