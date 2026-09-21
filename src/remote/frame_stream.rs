@@ -27,12 +27,36 @@ pub enum Fetch {
 /// its ends and frames just past the last one are the first ones. The focused frame always goes first on its
 /// own so it shows up as fast as possible; the rest are fetched nearest-first, favouring the direction of
 /// travel, in small bundles.
-pub fn plan_next(sequence: &[u32], focus: u32, direction: i32, have: impl Fn(u32) -> bool) -> Option<Fetch> {
+///
+/// `outrun` says the scrubber is moving faster than a round trip: the last fetch arrived after the focus had
+/// already moved on. Fetching the focused frame alone would then never catch up (each frame lands too late),
+/// so the focused frame is fetched together with the frames after it in the direction of travel instead.
+pub fn plan_next(
+    sequence: &[u32],
+    focus: u32,
+    direction: i32,
+    outrun: bool,
+    have: impl Fn(u32) -> bool,
+) -> Option<Fetch> {
     if focus == 0 {
         return None;
     }
     if !have(focus) {
-        return Some(Fetch::Single(focus));
+        if !outrun {
+            return Some(Fetch::Single(focus));
+        }
+        return Some(if direction >= 0 {
+            Fetch::Bundle {
+                start: focus,
+                count: BUNDLE_FRAMES,
+            }
+        } else {
+            let start = focus.saturating_sub(BUNDLE_FRAMES - 1).max(1);
+            Fetch::Bundle {
+                start,
+                count: focus - start + 1,
+            }
+        });
     }
     let count = sequence.len();
     let focus_index = sequence.binary_search(&focus).ok()?;
@@ -174,6 +198,7 @@ impl FrameCache {
 struct StreamState {
     remote_path: String,
     direction: i32,
+    outrun: bool,
     epoch: u64,
     cache: FrameCache,
 }
@@ -274,9 +299,13 @@ impl FrameStream {
             let job = {
                 let state = shared.state.lock().unwrap();
                 let plan = if client.is_connected() && !state.remote_path.is_empty() {
-                    plan_next(state.cache.sequence(), state.cache.focus(), state.direction, |f| {
-                        state.cache.have(f)
-                    })
+                    plan_next(
+                        state.cache.sequence(),
+                        state.cache.focus(),
+                        state.direction,
+                        state.outrun,
+                        |f| state.cache.have(f),
+                    )
                 } else {
                     None
                 };
@@ -315,6 +344,8 @@ impl FrameStream {
                     for (number, bytes) in frames {
                         state.cache.insert(number, Arc::new(bytes));
                     }
+                    let focus = state.cache.focus();
+                    state.outrun = !state.cache.have(focus);
                 }
                 Err(_) => {
                     let state = shared.state.lock().unwrap();
