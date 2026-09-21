@@ -150,15 +150,79 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Read the config file from `path`, falling back to default values if missing or invalid.
+    /// Read the config file from `path`, tolerating hand edits: unreadable or non-object files give defaults
+    /// (a corrupt file is kept as `<name>.bak`), an entry of the wrong type falls back to its default while every
+    /// other entry is kept, and out-of-range values are clamped to something the app can run with.
     pub fn load<P: AsRef<Path>>(path: P) -> Self {
         let path = path.as_ref();
-        if let Ok(contents) = fs::read_to_string(path)
-            && let Ok(cfg) = serde_json::from_str::<Config>(&contents)
-        {
-            return cfg;
+        let Ok(contents) = fs::read_to_string(path) else {
+            return Self::default();
+        };
+        let Ok(serde_json::Value::Object(entries)) = serde_json::from_str::<serde_json::Value>(&contents) else {
+            let _ = fs::rename(path, path.with_extension("json.bak"));
+            return Self::default();
+        };
+
+        let mut merged = match serde_json::to_value(Self::default()) {
+            Ok(serde_json::Value::Object(map)) => map,
+            _ => return Self::default(),
+        };
+        for (key, value) in entries {
+            if !merged.contains_key(&key) {
+                continue;
+            }
+            let previous = merged.insert(key.clone(), value);
+            if serde_json::from_value::<Config>(serde_json::Value::Object(merged.clone())).is_err() {
+                match previous {
+                    Some(prev) => merged.insert(key, prev),
+                    None => merged.remove(&key),
+                };
+            }
         }
-        Self::default()
+
+        let mut cfg = serde_json::from_value::<Config>(serde_json::Value::Object(merged)).unwrap_or_default();
+        cfg.sanitize();
+        cfg
+    }
+
+    /// Replace values the app cannot run with (zero sizes, NaN, out-of-range) by defaults or the nearest valid value.
+    pub fn sanitize(&mut self) {
+        let defaults = Self::default();
+        let finite_or = |value: f32, fallback: f32| if value.is_finite() { value } else { fallback };
+
+        self.playback_speed = if self.playback_speed.is_finite() && self.playback_speed > 0.0 {
+            self.playback_speed.clamp(0.05, 16.0)
+        } else {
+            defaults.playback_speed
+        };
+        self.remote_port = if self.remote_port == 0 {
+            defaults.remote_port
+        } else {
+            self.remote_port
+        };
+        if self.remote_python.trim().is_empty() {
+            self.remote_python = defaults.remote_python;
+        }
+
+        self.window_width = self.window_width.clamp(320, 16384);
+        self.window_height = self.window_height.clamp(240, 16384);
+        if self.window_x.is_some_and(|x| x.unsigned_abs() > 100_000)
+            || self.window_y.is_some_and(|y| y.unsigned_abs() > 100_000)
+        {
+            self.window_x = None;
+            self.window_y = None;
+        }
+
+        self.camera_azimuth = finite_or(self.camera_azimuth, defaults.camera_azimuth);
+        self.camera_elevation = finite_or(self.camera_elevation, defaults.camera_elevation).clamp(-89.0, 89.0);
+        self.camera_distance = if self.camera_distance.is_finite() && self.camera_distance > 0.0 {
+            self.camera_distance.clamp(0.01, 10_000.0)
+        } else {
+            defaults.camera_distance
+        };
+        for component in &mut self.camera_target {
+            *component = finite_or(*component, 0.0);
+        }
     }
 
     /// Write config back to the specified path as pretty JSON, creating parent directories as needed.

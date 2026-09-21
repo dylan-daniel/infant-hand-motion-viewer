@@ -113,3 +113,63 @@ fn test_default_config_path_is_in_hidden_home_dir() {
         ".infant-hand-motion-viewer"
     );
 }
+
+#[test]
+fn test_config_wrong_typed_entry_only_resets_that_entry() {
+    let guard = TempDirGuard::new("config_wrong_type");
+    let path = guard.path().join("config.json");
+    fs::write(
+        &path,
+        r#"{"remote_port": "abc", "flag_layers_enabled": [true], "playback_speed": 2.0, "last_frame": 12, "unknown_key": 1}"#,
+    )
+    .unwrap();
+
+    let cfg = Config::load(&path);
+    assert_eq!(cfg.remote_port, 22);
+    assert_eq!(cfg.flag_layers_enabled, [true; 7]);
+    assert_eq!(cfg.playback_speed, 2.0);
+    assert_eq!(cfg.last_frame, 12);
+}
+
+#[test]
+fn test_config_out_of_range_values_are_sanitized() {
+    let guard = TempDirGuard::new("config_sanitize");
+    let path = guard.path().join("config.json");
+    fs::write(
+        &path,
+        r#"{"playback_speed": 0, "window_width": 0, "window_height": 99999999, "remote_port": 0,
+            "remote_python": "  ", "camera_distance": -3.0, "camera_elevation": 400.0, "window_x": 2000000000}"#,
+    )
+    .unwrap();
+
+    let cfg = Config::load(&path);
+    assert_eq!(cfg.playback_speed, 1.0);
+    assert_eq!(cfg.window_width, 320);
+    assert_eq!(cfg.window_height, 16384);
+    assert_eq!(cfg.remote_port, 22);
+    assert_eq!(cfg.remote_python, "python3");
+    assert_eq!(cfg.camera_distance, 7.0);
+    assert_eq!(cfg.camera_elevation, 89.0);
+    assert_eq!(cfg.window_x, None);
+}
+
+#[test]
+fn test_config_garbage_file_gives_defaults_and_is_backed_up() {
+    let guard = TempDirGuard::new("config_garbage");
+    let path = guard.path().join("config.json");
+    fs::write(&path, "{ this is not json").unwrap();
+
+    let cfg = Config::load(&path);
+    assert_eq!(cfg.playback_speed, 1.0);
+    assert!(!path.exists());
+    assert!(guard.path().join("config.json.bak").is_file());
+
+    fs::write(&path, "[1, 2, 3]").unwrap();
+    assert_eq!(Config::load(&path).window_width, 1024);
+}
+
+#[test]
+fn test_config_missing_file_gives_defaults() {
+    let guard = TempDirGuard::new("config_missing");
+    assert_eq!(Config::load(guard.path().join("nope.json")).remote_port, 22);
+}
