@@ -204,6 +204,11 @@ impl Config {
             self.remote_python = defaults.remote_python;
         }
 
+        if !self.remote_host.is_empty() && !crate::remote::is_valid_ssh_host(&self.remote_host) {
+            self.remote_host.clear();
+            self.remote_mode = false;
+        }
+
         self.window_width = self.window_width.clamp(320, 16384);
         self.window_height = self.window_height.clamp(240, 16384);
         if self.window_x.is_some_and(|x| x.unsigned_abs() > 100_000)

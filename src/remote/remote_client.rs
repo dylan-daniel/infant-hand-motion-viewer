@@ -227,7 +227,7 @@ impl RemoteClient {
         if config.port != 22 && config.port > 0 {
             c.arg("-p").arg(config.port.to_string());
         }
-        c.arg(&config.host);
+        c.arg("--").arg(&config.host);
         c
     }
 
@@ -263,6 +263,9 @@ impl RemoteClient {
 
     fn connect_internal(&self, config: &RemoteConfig) -> Result<(), String> {
         let is_local = config.host.is_empty() || config.host == "localhost" || config.host == "127.0.0.1";
+        if !is_local && !is_valid_ssh_host(&config.host) {
+            return Err(format!("Invalid host: {:?}", config.host));
+        }
 
         let python = if config.python_bin.is_empty() {
             "python3"
@@ -664,4 +667,10 @@ pub fn frame_number_from_name(name: &str) -> Option<u32> {
     let start = file.find(|c: char| c.is_ascii_digit())?;
     let digits: String = file[start..].chars().take_while(|c| c.is_ascii_digit()).collect();
     digits.parse().ok()
+}
+
+/// Whether `host` is safe to hand to `ssh` as its destination: no whitespace or control characters,
+/// and not something `ssh` could mistake for an option.
+pub fn is_valid_ssh_host(host: &str) -> bool {
+    !host.is_empty() && !host.starts_with('-') && !host.chars().any(|c| c.is_whitespace() || c.is_control())
 }

@@ -173,3 +173,14 @@ fn test_config_missing_file_gives_defaults() {
     let guard = TempDirGuard::new("config_missing");
     assert_eq!(Config::load(guard.path().join("nope.json")).remote_port, 22);
 }
+
+#[test]
+fn test_config_option_like_remote_host_is_dropped() {
+    let guard = TempDirGuard::new("config_host");
+    let path = guard.path().join("config.json");
+    fs::write(&path, r#"{"remote_host": "-oProxyCommand=evil", "remote_mode": true}"#).unwrap();
+
+    let cfg = Config::load(&path);
+    assert_eq!(cfg.remote_host, "");
+    assert!(!cfg.remote_mode);
+}
