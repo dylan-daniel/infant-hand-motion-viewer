@@ -9,7 +9,7 @@ use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::event::{DeviceEvent, DeviceId, ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
-use winit::window::{Fullscreen, Window, WindowId};
+use winit::window::{CursorGrabMode, Fullscreen, Window, WindowId};
 
 use dear_imgui_rs::{
     ConfigFlags, Context as ImGuiContext, DockLayout, DockLayoutApply, DockNodeFlags, DockSplit, TextureId, WindowKey,
@@ -85,6 +85,8 @@ struct AppState {
 
     // Input states
     right_mouse_down: bool,
+    cursor_pos: PhysicalPosition<f64>,
+    relative_mouse_anchor: Option<PhysicalPosition<f64>>,
     shift_down: bool,
     orbiting: bool,
     panning: bool,
@@ -153,6 +155,24 @@ impl AppState {
         self.loaded_frame = None;
         self.transform = None;
         self.depth_reference = None;
+    }
+
+    /// Hide and pin the cursor while dragging the camera, restoring it where it was afterwards.
+    fn set_relative_mouse(&mut self, enabled: bool) {
+        if enabled {
+            if self.relative_mouse_anchor.is_some() {
+                return;
+            }
+            self.relative_mouse_anchor = Some(self.cursor_pos);
+            self.window.set_cursor_visible(false);
+            if self.window.set_cursor_grab(CursorGrabMode::Locked).is_err() {
+                let _ = self.window.set_cursor_grab(CursorGrabMode::Confined);
+            }
+        } else if let Some(anchor) = self.relative_mouse_anchor.take() {
+            let _ = self.window.set_cursor_grab(CursorGrabMode::None);
+            let _ = self.window.set_cursor_position(anchor);
+            self.window.set_cursor_visible(true);
+        }
     }
 
     fn active_camera_mut(&mut self) -> &mut dyn Camera {
@@ -370,6 +390,8 @@ impl ApplicationHandler for AppRunner {
             free_cam,
             camera_is_free: self.settings.free_camera,
             right_mouse_down: false,
+            cursor_pos: PhysicalPosition::new(0.0, 0.0),
+            relative_mouse_anchor: None,
             shift_down: false,
             orbiting: false,
             panning: false,
@@ -511,17 +533,30 @@ impl ApplicationHandler for AppRunner {
                 if button == MouseButton::Right {
                     let pressed = el_state == ElementState::Pressed;
                     state.right_mouse_down = pressed;
-                    if pressed && state.viewport_hovered {
+                    let modal_open = state.show_remote_modal || state.show_storage_modal;
+                    if pressed && state.viewport_hovered && !modal_open {
                         if state.shift_down {
                             state.panning = true;
                         } else {
                             state.orbiting = true;
                         }
+                        state.set_relative_mouse(true);
                     } else {
                         state.orbiting = false;
                         state.panning = false;
+                        state.set_relative_mouse(false);
                     }
                 }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                if state.relative_mouse_anchor.is_none() {
+                    state.cursor_pos = position;
+                }
+            }
+            WindowEvent::Focused(false) => {
+                state.orbiting = false;
+                state.panning = false;
+                state.set_relative_mouse(false);
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 if state.viewport_hovered {
