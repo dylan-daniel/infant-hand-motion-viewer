@@ -184,3 +184,15 @@ fn test_config_option_like_remote_host_is_dropped() {
     assert_eq!(cfg.remote_host, "");
     assert!(!cfg.remote_mode);
 }
+
+#[test]
+fn test_config_msaa_samples_defaults_and_validates() {
+    assert_eq!(Config::default().msaa_samples, 4);
+
+    let guard = TempDirGuard::new("config_msaa");
+    let path = guard.path().join("config.json");
+    for (written, expected) in [(1, 1), (2, 2), (4, 4), (8, 8), (0, 4), (3, 4), (16, 4)] {
+        fs::write(&path, format!(r#"{{"msaa_samples": {written}}}"#)).unwrap();
+        assert_eq!(Config::load(&path).msaa_samples, expected, "written {written}");
+    }
+}

@@ -31,6 +31,10 @@ fn default_window_height() -> u32 {
     720
 }
 
+fn default_msaa_samples() -> u32 {
+    4
+}
+
 fn default_camera_azimuth() -> f32 {
     30.0
 }
@@ -102,6 +106,9 @@ pub struct Config {
     #[serde(default)]
     pub window_display: i32,
 
+    #[serde(default = "default_msaa_samples")]
+    pub msaa_samples: u32,
+
     #[serde(default = "default_camera_azimuth")]
     pub camera_azimuth: f32,
     #[serde(default = "default_camera_elevation")]
@@ -140,6 +147,7 @@ impl Default for Config {
             window_height: default_window_height(),
             window_fullscreen: default_true(),
             window_display: 0,
+            msaa_samples: default_msaa_samples(),
             camera_azimuth: default_camera_azimuth(),
             camera_elevation: default_camera_elevation(),
             camera_distance: default_camera_distance(),
@@ -206,6 +214,10 @@ impl Config {
         if !self.remote_host.is_empty() && !crate::remote::is_valid_ssh_host(&self.remote_host) {
             self.remote_host.clear();
             self.remote_mode = false;
+        }
+
+        if !matches!(self.msaa_samples, 1 | 2 | 4 | 8) {
+            self.msaa_samples = defaults.msaa_samples;
         }
 
         self.window_width = self.window_width.clamp(320, 16384);
