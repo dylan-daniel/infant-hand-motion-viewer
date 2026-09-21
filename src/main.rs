@@ -22,6 +22,7 @@ use infant_hand_motion_viewer::config::Config;
 use infant_hand_motion_viewer::data::{MeshSequence, Transform, compute_transform, reference_depth};
 use infant_hand_motion_viewer::graphics::{
     Camera, FrameGpu, Framebuffer, FreeCamera, Gpu, ImageTexture, OrbitCamera, Renderer, SceneRender, prepare_frame,
+    supported_sample_counts,
 };
 use infant_hand_motion_viewer::remote::{ConnectionState, FrameStream, RemoteClient, RemoteConfig};
 use infant_hand_motion_viewer::ui::{
@@ -305,7 +306,13 @@ impl ApplicationHandler for AppRunner {
             ..Default::default()
         }))
         .expect("failed to create GPU device");
-        let gpu = Gpu { device, queue };
+        let gpu = Gpu {
+            device,
+            queue,
+            msaa_counts: supported_sample_counts(&adapter),
+        };
+        let sample_count = gpu.resolve_sample_count(self.settings.msaa_samples);
+        self.settings.msaa_samples = sample_count;
 
         // Prefer a non-sRGB surface so UI colors are written raw, matching the C++ viewer's default framebuffer.
         let caps = surface.get_capabilities(&adapter);
@@ -366,8 +373,8 @@ impl ApplicationHandler for AppRunner {
         .expect("failed to create imgui renderer");
         imgui_renderer.set_gamma_mode(GammaMode::Linear);
 
-        let renderer = Renderer::new(&gpu);
-        let framebuffer = Framebuffer::new(&gpu, phys_size.width.max(1), phys_size.height.max(1));
+        let renderer = Renderer::new(&gpu, sample_count);
+        let framebuffer = Framebuffer::new(&gpu, phys_size.width.max(1), phys_size.height.max(1), sample_count);
         let scene_texture = imgui_renderer
             .register_external_texture(framebuffer.color_view())
             .expect("failed to register scene texture");

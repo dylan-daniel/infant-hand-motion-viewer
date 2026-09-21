@@ -59,6 +59,116 @@ impl LineBuffer {
 
 const FLAT_FLOATS_PER_VERTEX: usize = 7;
 
+/// The scene's render pipelines, all built for one multisample count.
+struct Pipelines {
+    lit_opaque: wgpu::RenderPipeline,
+    lit_blend: wgpu::RenderPipeline,
+    flat_lines_depth: wgpu::RenderPipeline,
+    flat_lines_overlay: wgpu::RenderPipeline,
+    flat_tris_blend: wgpu::RenderPipeline,
+}
+
+fn build_pipelines(
+    device: &wgpu::Device,
+    shader: &wgpu::ShaderModule,
+    layout: &wgpu::PipelineLayout,
+    samples: u32,
+) -> Pipelines {
+    let lit_attributes = [
+        wgpu::vertex_attr_array![0 => Float32x3],
+        wgpu::vertex_attr_array![1 => Float32x3],
+        wgpu::vertex_attr_array![2 => Float32x4],
+    ];
+    let lit_buffers: Vec<Option<wgpu::VertexBufferLayout>> = lit_attributes
+        .iter()
+        .zip([12u64, 12, 16])
+        .map(|(attributes, stride)| {
+            Some(wgpu::VertexBufferLayout {
+                array_stride: stride,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes,
+            })
+        })
+        .collect();
+    let flat_attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4];
+    let flat_buffers = [Some(wgpu::VertexBufferLayout {
+        array_stride: (FLAT_FLOATS_PER_VERTEX * 4) as u64,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &flat_attributes,
+    })];
+
+    let pipeline = |label: &str,
+                    vs: &str,
+                    fs: &str,
+                    buffers: &[Option<wgpu::VertexBufferLayout>],
+                    topology: wgpu::PrimitiveTopology,
+                    blend: Option<wgpu::BlendState>,
+                    depth_test: bool,
+                    depth_write: bool| {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some(vs),
+                compilation_options: Default::default(),
+                buffers,
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: shader,
+                entry_point: Some(fs),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: COLOR_FORMAT,
+                    blend,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(depth_write),
+                depth_compare: Some(if depth_test {
+                    wgpu::CompareFunction::Less
+                } else {
+                    wgpu::CompareFunction::Always
+                }),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: samples,
+                ..Default::default()
+            },
+            multiview_mask: None,
+            cache: None,
+        })
+    };
+    let alpha = Some(wgpu::BlendState::ALPHA_BLENDING);
+    let tris = wgpu::PrimitiveTopology::TriangleList;
+    let lines = wgpu::PrimitiveTopology::LineList;
+
+    Pipelines {
+        lit_opaque: pipeline("lit opaque", "vs_lit", "fs_lit", &lit_buffers, tris, None, true, true),
+        lit_blend: pipeline("lit blend", "vs_lit", "fs_lit", &lit_buffers, tris, alpha, true, false),
+        flat_lines_depth: pipeline("grid", "vs_flat", "fs_flat", &flat_buffers, lines, None, true, true),
+        flat_lines_overlay: pipeline("axes", "vs_flat", "fs_flat", &flat_buffers, lines, None, false, false),
+        flat_tris_blend: pipeline(
+            "camera marker",
+            "vs_flat",
+            "fs_flat",
+            &flat_buffers,
+            tris,
+            alpha,
+            true,
+            false,
+        ),
+    }
+}
+
 /// Core wgpu renderer managing pipelines and drawing passes for the 3D scene.
 pub struct Renderer {
     lit_opaque: wgpu::RenderPipeline,
@@ -66,6 +176,9 @@ pub struct Renderer {
     flat_lines_depth: wgpu::RenderPipeline,
     flat_lines_overlay: wgpu::RenderPipeline,
     flat_tris_blend: wgpu::RenderPipeline,
+    shader: wgpu::ShaderModule,
+    layout: wgpu::PipelineLayout,
+    sample_count: u32,
     bind_group: wgpu::BindGroup,
     uniforms: wgpu::Buffer,
     uniform_stride: u64,
@@ -76,7 +189,8 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub fn new(gpu: &Gpu) -> Self {
+    /// `sample_count` is the multisample count the scene is rendered with; the target framebuffer must match it.
+    pub fn new(gpu: &Gpu, sample_count: u32) -> Self {
         let device = &gpu.device;
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("scene shader"),
@@ -124,98 +238,20 @@ impl Renderer {
             immediate_size: 0,
         });
 
-        let lit_attributes = [
-            wgpu::vertex_attr_array![0 => Float32x3],
-            wgpu::vertex_attr_array![1 => Float32x3],
-            wgpu::vertex_attr_array![2 => Float32x4],
-        ];
-        let lit_buffers: Vec<Option<wgpu::VertexBufferLayout>> = lit_attributes
-            .iter()
-            .zip([12u64, 12, 16])
-            .map(|(attributes, stride)| {
-                Some(wgpu::VertexBufferLayout {
-                    array_stride: stride,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes,
-                })
-            })
-            .collect();
-        let flat_attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4];
-        let flat_buffers = [Some(wgpu::VertexBufferLayout {
-            array_stride: (FLAT_FLOATS_PER_VERTEX * 4) as u64,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &flat_attributes,
-        })];
-
-        let pipeline = |label: &str,
-                        vs: &str,
-                        fs: &str,
-                        buffers: &[Option<wgpu::VertexBufferLayout>],
-                        topology: wgpu::PrimitiveTopology,
-                        blend: Option<wgpu::BlendState>,
-                        depth_test: bool,
-                        depth_write: bool| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some(vs),
-                    compilation_options: Default::default(),
-                    buffers,
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some(fs),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: COLOR_FORMAT,
-                        blend,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology,
-                    ..Default::default()
-                },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: DEPTH_FORMAT,
-                    depth_write_enabled: Some(depth_write),
-                    depth_compare: Some(if depth_test {
-                        wgpu::CompareFunction::Less
-                    } else {
-                        wgpu::CompareFunction::Always
-                    }),
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
-                multisample: Default::default(),
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-        let alpha = Some(wgpu::BlendState::ALPHA_BLENDING);
-        let tris = wgpu::PrimitiveTopology::TriangleList;
-        let lines = wgpu::PrimitiveTopology::LineList;
+        let pipelines = build_pipelines(device, &shader, &layout, sample_count);
 
         let mut sphere = Vec::new();
         append_sphere(&mut sphere, 0.1, 24, 16, Vec4::new(1.0, 0.4, 0.7, 0.35));
 
         Self {
-            lit_opaque: pipeline("lit opaque", "vs_lit", "fs_lit", &lit_buffers, tris, None, true, true),
-            lit_blend: pipeline("lit blend", "vs_lit", "fs_lit", &lit_buffers, tris, alpha, true, false),
-            flat_lines_depth: pipeline("grid", "vs_flat", "fs_flat", &flat_buffers, lines, None, true, true),
-            flat_lines_overlay: pipeline("axes", "vs_flat", "fs_flat", &flat_buffers, lines, None, false, false),
-            flat_tris_blend: pipeline(
-                "camera marker",
-                "vs_flat",
-                "fs_flat",
-                &flat_buffers,
-                tris,
-                alpha,
-                true,
-                false,
-            ),
+            lit_opaque: pipelines.lit_opaque,
+            lit_blend: pipelines.lit_blend,
+            flat_lines_depth: pipelines.flat_lines_depth,
+            flat_lines_overlay: pipelines.flat_lines_overlay,
+            flat_tris_blend: pipelines.flat_tris_blend,
+            shader,
+            layout,
+            sample_count,
             bind_group,
             uniforms,
             uniform_stride,
@@ -224,6 +260,24 @@ impl Renderer {
             axes: LineBuffer::new(device, "axes", &axes_vertices(0.0)),
             marker: LineBuffer::new(device, "camera marker", &sphere),
         }
+    }
+
+    pub fn sample_count(&self) -> u32 {
+        self.sample_count
+    }
+
+    /// Rebuild the pipelines for a new multisample count. The framebuffer must be switched to the same count.
+    pub fn set_sample_count(&mut self, gpu: &Gpu, sample_count: u32) {
+        if sample_count == self.sample_count {
+            return;
+        }
+        let pipelines = build_pipelines(&gpu.device, &self.shader, &self.layout, sample_count);
+        self.lit_opaque = pipelines.lit_opaque;
+        self.lit_blend = pipelines.lit_blend;
+        self.flat_lines_depth = pipelines.flat_lines_depth;
+        self.flat_lines_overlay = pipelines.flat_lines_overlay;
+        self.flat_tris_blend = pipelines.flat_tris_blend;
+        self.sample_count = sample_count;
     }
 
     fn bind_draw(
@@ -267,6 +321,17 @@ impl Renderer {
         let proj = glam::camera::rh::proj::directx::perspective(45.0f32.to_radians(), aspect, 0.1, 500.0);
         let view = camera.view_matrix();
 
+        assert_eq!(
+            framebuffer.sample_count(),
+            self.sample_count,
+            "renderer and framebuffer must use the same multisample count"
+        );
+        // With multisampling the scene is drawn into the multisampled target and resolved into the color view the UI shows
+        let (color_view, resolve_target, store) = match framebuffer.msaa_color_view() {
+            Some(msaa) => (msaa, Some(framebuffer.color_view()), wgpu::StoreOp::Discard),
+            None => (framebuffer.color_view(), None, wgpu::StoreOp::Store),
+        };
+
         let mut encoder = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("scene") });
@@ -274,12 +339,12 @@ impl Renderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("scene pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: framebuffer.color_view(),
+                    view: color_view,
                     depth_slice: None,
-                    resolve_target: None,
+                    resolve_target,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(CLEAR_COLOR),
-                        store: wgpu::StoreOp::Store,
+                        store,
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {

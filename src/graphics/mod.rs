@@ -7,7 +7,7 @@ pub mod renderer;
 
 pub use camera::{Camera, FreeCamera, LOOK_SENSITIVITY, OrbitCamera};
 pub use framebuffer::Framebuffer;
-pub use gpu::{COLOR_FORMAT, DEPTH_FORMAT, Gpu};
+pub use gpu::{COLOR_FORMAT, DEPTH_FORMAT, Gpu, MSAA_CANDIDATES, pick_sample_count, supported_sample_counts};
 pub use image::ImageTexture;
 pub use mesh::{FrameGpu, GpuMesh, HandGpu, PreparedFrame, PreparedHand, prepare_frame};
 pub use renderer::{Renderer, SceneRender};
