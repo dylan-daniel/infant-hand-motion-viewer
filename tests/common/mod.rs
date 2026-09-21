@@ -142,3 +142,67 @@ impl Drop for TempSyntheticExport {
         let _ = std::fs::remove_file(&self.path);
     }
 }
+
+/// A GPU device on whatever adapter the machine has (a software one is fine), or `None` when there is none.
+pub fn headless_gpu() -> Option<infant_hand_motion_viewer::graphics::Gpu> {
+    use dear_imgui_wgpu::wgpu;
+    use infant_hand_motion_viewer::graphics::{Gpu, required_device_features, supported_sample_counts};
+
+    let instance = wgpu::Instance::default();
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        required_features: required_device_features(&adapter),
+        ..Default::default()
+    }))
+    .ok()?;
+    Some(Gpu {
+        device,
+        queue,
+        msaa_counts: supported_sample_counts(&adapter),
+    })
+}
+
+/// Copies an RGBA8 texture (whose width times four is a multiple of 256 bytes) back to the CPU.
+pub fn read_rgba(
+    gpu: &infant_hand_motion_viewer::graphics::Gpu,
+    texture: &dear_imgui_wgpu::wgpu::Texture,
+    width: u32,
+    height: u32,
+) -> Vec<u8> {
+    use dear_imgui_wgpu::wgpu;
+
+    assert_eq!((width * 4) % 256, 0, "row size must be a multiple of 256 bytes");
+    let readback = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("readback"),
+        size: u64::from(width * height * 4),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &readback,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 4),
+                rows_per_image: Some(height),
+            },
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    gpu.queue.submit([encoder.finish()]);
+    readback
+        .slice(..)
+        .map_async(wgpu::MapMode::Read, |result| result.unwrap());
+    gpu.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    let pixels = readback.slice(..).get_mapped_range().expect("mapped range").to_vec();
+    readback.unmap();
+    pixels
+}

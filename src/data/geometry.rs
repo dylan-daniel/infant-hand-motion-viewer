@@ -178,6 +178,41 @@ pub fn mano_faces(is_right: bool) -> Vec<[u16; 3]> {
     faces
 }
 
+/// Builds an indexed surface mesh whose smooth per-vertex normals weight each face by the corner angle at the vertex,
+/// which is how trimesh computes `vertex_normals` (Thuerrner and Wuethrich 1998).
+pub fn build_angle_weighted_surface(verts: &[Vec3], faces: &[[u16; 3]], color: Vec4) -> MeshArrays {
+    let mut normals = vec![Vec3::ZERO; verts.len()];
+    for face in faces {
+        let corners = [face[0] as usize, face[1] as usize, face[2] as usize];
+        let p = [verts[corners[0]], verts[corners[1]], verts[corners[2]]];
+        let face_normal = (p[1] - p[0]).cross(p[2] - p[0]).normalize_or_zero();
+        if face_normal == Vec3::ZERO {
+            continue;
+        }
+        for i in 0..3 {
+            let to_next = (p[(i + 1) % 3] - p[i]).normalize_or_zero();
+            let to_prev = (p[(i + 2) % 3] - p[i]).normalize_or_zero();
+            let angle = to_next.dot(to_prev).clamp(-1.0, 1.0).acos();
+            normals[corners[i]] += face_normal * angle;
+        }
+    }
+
+    let mut arrays = MeshArrays {
+        vertex_count: verts.len(),
+        ..Default::default()
+    };
+    for (vertex, normal) in verts.iter().zip(&normals) {
+        let normal = normal.normalize_or_zero();
+        arrays.positions.extend_from_slice(&[vertex.x, vertex.y, vertex.z]);
+        arrays.normals.extend_from_slice(&[normal.x, normal.y, normal.z]);
+        arrays.colors.extend_from_slice(&[color.x, color.y, color.z, color.w]);
+    }
+    for face in faces {
+        arrays.indices.extend_from_slice(face);
+    }
+    arrays
+}
+
 /// Builds an indexed surface mesh with area-weighted smooth per-vertex normals.
 pub fn build_indexed_surface(verts: &[Vec3], faces: &[[u16; 3]], color: Vec4) -> MeshArrays {
     let vertex_count = verts.len();

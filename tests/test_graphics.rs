@@ -1,3 +1,5 @@
+mod common;
+
 use std::path::PathBuf;
 
 use glam::Vec3;
@@ -231,28 +233,8 @@ fn test_pick_sample_count_uses_the_highest_supported_not_above_the_request() {
     assert_eq!(pick_sample_count(&[], 4), 1);
 }
 
-/// A GPU device on whatever adapter the machine has (a software one is fine), or `None` when there is none.
-fn headless_gpu() -> Option<infant_hand_motion_viewer::graphics::Gpu> {
-    use dear_imgui_wgpu::wgpu;
-    use infant_hand_motion_viewer::graphics::{Gpu, required_device_features, supported_sample_counts};
-
-    let instance = wgpu::Instance::default();
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        required_features: required_device_features(&adapter),
-        ..Default::default()
-    }))
-    .ok()?;
-    Some(Gpu {
-        device,
-        queue,
-        msaa_counts: supported_sample_counts(&adapter),
-    })
-}
-
 /// Renders the grid and axes at `samples` and returns the RGBA pixels of the resolved color texture.
 fn render_scene_pixels(gpu: &infant_hand_motion_viewer::graphics::Gpu, samples: u32) -> Vec<u8> {
-    use dear_imgui_wgpu::wgpu;
     use infant_hand_motion_viewer::graphics::{Framebuffer, Renderer, SceneRender};
 
     const SIZE: u32 = 128;
@@ -273,39 +255,7 @@ fn render_scene_pixels(gpu: &infant_hand_motion_viewer::graphics::Gpu, samples: 
         },
     );
 
-    let readback = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("readback"),
-        size: u64::from(SIZE * SIZE * 4),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-    let mut encoder = gpu
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-    encoder.copy_texture_to_buffer(
-        framebuffer.color_texture().as_image_copy(),
-        wgpu::TexelCopyBufferInfo {
-            buffer: &readback,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(SIZE * 4),
-                rows_per_image: Some(SIZE),
-            },
-        },
-        wgpu::Extent3d {
-            width: SIZE,
-            height: SIZE,
-            depth_or_array_layers: 1,
-        },
-    );
-    gpu.queue.submit([encoder.finish()]);
-    readback
-        .slice(..)
-        .map_async(wgpu::MapMode::Read, |result| result.unwrap());
-    gpu.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-    let pixels = readback.slice(..).get_mapped_range().expect("mapped range").to_vec();
-    readback.unmap();
-    pixels
+    common::read_rgba(gpu, framebuffer.color_texture(), SIZE, SIZE)
 }
 
 fn distinct_colors(pixels: &[u8]) -> usize {
@@ -319,7 +269,7 @@ fn distinct_colors(pixels: &[u8]) -> usize {
 
 #[test]
 fn test_multisampling_smooths_scene_edges() {
-    let Some(gpu) = headless_gpu() else {
+    let Some(gpu) = common::headless_gpu() else {
         eprintln!("no GPU adapter available; skipping");
         return;
     };
@@ -342,7 +292,7 @@ fn test_multisampling_smooths_scene_edges() {
 fn test_scene_renders_with_every_supported_sample_count_and_switches_live() {
     use infant_hand_motion_viewer::graphics::{Framebuffer, Renderer};
 
-    let Some(gpu) = headless_gpu() else {
+    let Some(gpu) = common::headless_gpu() else {
         eprintln!("no GPU adapter available; skipping");
         return;
     };

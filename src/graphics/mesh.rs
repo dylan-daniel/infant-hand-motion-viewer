@@ -1,5 +1,5 @@
 use dear_imgui_wgpu::wgpu::{self, util::DeviceExt};
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Vec3, Vec4};
 
 use crate::data::geometry::{
     LEFT_HAND_COLOR, MeshArrays, PreparedMesh, RIGHT_HAND_COLOR, mano_faces, prepare_hand, track_color,
@@ -70,19 +70,28 @@ pub struct PreparedHand {
 
 pub type PreparedFrame = Vec<PreparedHand>;
 
+/// The color a hand is drawn in, or `None` if it is hidden. With per-track coloring on every hand shows, colored by
+/// its track; with it off only infant hands (or hands with no label at all) show, tinted by side.
+pub fn hand_display_color(hand: &HandData, per_track_coloring: bool) -> Option<Vec4> {
+    if per_track_coloring {
+        return Some(track_color(hand.hand_track_id));
+    }
+    if !hand.label.is_empty() && hand.label != "infant" {
+        return None;
+    }
+    Some(if hand.is_right {
+        RIGHT_HAND_COLOR
+    } else {
+        LEFT_HAND_COLOR
+    })
+}
+
 /// Expand a frame's hands into GPU-ready arrays plus each hand's mean depth.
 pub fn prepare_frame(hands: &[HandData], per_track_coloring: bool) -> PreparedFrame {
     let mut prepared = Vec::with_capacity(hands.len());
     for hand in hands {
-        if !per_track_coloring && !hand.label.is_empty() && hand.label != "infant" {
+        let Some(color) = hand_display_color(hand, per_track_coloring) else {
             continue;
-        }
-        let color = if per_track_coloring {
-            track_color(hand.hand_track_id)
-        } else if hand.is_right {
-            RIGHT_HAND_COLOR
-        } else {
-            LEFT_HAND_COLOR
         };
         let faces = mano_faces(hand.is_right);
         let arrays = prepare_hand(&hand.verts, &faces, color, &hand.joints);
