@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use winit::application::ApplicationHandler;
@@ -114,6 +114,7 @@ struct AppState {
     remote_client: RemoteClient,
     remote_fetch_worker: Arc<WorkerQueue>,
     remote_open_worker: Arc<WorkerQueue>,
+    pending_remote_open: Arc<Mutex<Option<PendingOpen>>>,
     frame_stream: FrameStream,
     streamed_frame: Option<u32>,
     current_remote_path: String,
@@ -393,6 +394,7 @@ impl ApplicationHandler for AppRunner {
             remote_client,
             remote_fetch_worker,
             remote_open_worker,
+            pending_remote_open: Arc::new(Mutex::new(None)),
             frame_stream,
             streamed_frame: None,
             current_remote_path: String::new(),
@@ -661,6 +663,10 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         if let Some(ref df) = state.settings.data_folder {
             state.explorer.set_root(df);
         }
+    }
+
+    if let Some(ready) = state.pending_remote_open.lock().unwrap().take() {
+        state.pending_open_file = Some(ready);
     }
 
     // Apply deferred open
@@ -1037,11 +1043,15 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
                 let client = state.remote_client.clone();
                 let seq_generation = state.active_sequence_id.fetch_add(1, Ordering::SeqCst) + 1;
                 let active_id = Arc::clone(&state.active_sequence_id);
+                let ready = Arc::clone(&state.pending_remote_open);
                 state.remote_open_worker.submit(move || {
                     if client.fetch_file(&remote_path, &local_export).is_ok()
                         && active_id.load(Ordering::SeqCst) == seq_generation
                     {
-                        // File downloaded successfully
+                        *ready.lock().unwrap() = Some(PendingOpen {
+                            local_path: local_export.to_string_lossy().into_owned(),
+                            remote_path,
+                        });
                     }
                 });
             }
