@@ -7,6 +7,7 @@ pub struct MenuState {
     pub show_camera_marker: bool,
     pub free_camera: bool,
     pub per_track_coloring: bool,
+    pub hand_overlay: bool,
     /// Multisample count in use (1 = off) and the counts the GPU offers, for the Anti-Aliasing submenu.
     pub msaa_samples: u32,
     pub msaa_options: Vec<u32>,
@@ -75,6 +76,15 @@ pub fn draw_menu_bar(ui: &Ui, mut state: MenuState) -> MenuResult {
                          On: every hand is shown, colored uniquely by its tracking ID.\n\
                          Only applies to hands opened from a pipeline export file; a raw mesh\n\
                          sequence with no tracking/classification data is never filtered.",
+                    );
+                });
+            }
+            ui.checkbox("Hand Overlay", &mut state.hand_overlay);
+            if ui.is_item_hovered() {
+                crate::ui::padded_tooltip(ui, || {
+                    ui.text(
+                        "Draws the hands over the Frame View image, projected with WiLoR's demo camera\n\
+                         and shaded like its demo renders. Follows Per-Track Coloring for which hands show.",
                     );
                 });
             }

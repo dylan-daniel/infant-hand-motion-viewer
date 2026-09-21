@@ -21,8 +21,8 @@ use infant_hand_motion_viewer::assets;
 use infant_hand_motion_viewer::config::Config;
 use infant_hand_motion_viewer::data::{MeshSequence, Transform, compute_transform, reference_depth};
 use infant_hand_motion_viewer::graphics::{
-    Camera, FrameGpu, Framebuffer, FreeCamera, Gpu, ImageTexture, OrbitCamera, Renderer, SceneRender, prepare_frame,
-    required_device_features, supported_sample_counts,
+    Camera, FrameGpu, Framebuffer, FreeCamera, Gpu, HandOverlay, ImageTexture, OrbitCamera, Renderer, SceneRender,
+    overlay_focal_length, prepare_frame, prepare_overlay_hands, required_device_features, supported_sample_counts,
 };
 use infant_hand_motion_viewer::remote::{ConnectionState, FrameStream, RemoteClient, RemoteConfig};
 use infant_hand_motion_viewer::ui::{
@@ -75,6 +75,10 @@ struct AppState {
     scene_generation: u64,
     frame_texture: Option<ExternalTextureId>,
     frame_generation: u64,
+    hand_overlay: HandOverlay,
+    overlay_texture: Option<ExternalTextureId>,
+    overlay_generation: u64,
+    overlay_key: Option<OverlayKey>,
     fps_font: dear_imgui_rs::FontId,
 
     renderer: Renderer,
@@ -378,6 +382,7 @@ impl ApplicationHandler for AppRunner {
         imgui_renderer.set_gamma_mode(GammaMode::Linear);
 
         let renderer = Renderer::new(&gpu, sample_count);
+        let hand_overlay = HandOverlay::new(&gpu, sample_count);
         let framebuffer = Framebuffer::new(&gpu, phys_size.width.max(1), phys_size.height.max(1), sample_count);
         let scene_texture = imgui_renderer
             .register_external_texture(framebuffer.color_view())
@@ -436,6 +441,10 @@ impl ApplicationHandler for AppRunner {
             scene_generation,
             frame_texture: None,
             frame_generation: 0,
+            hand_overlay,
+            overlay_texture: None,
+            overlay_generation: 0,
+            overlay_key: None,
             fps_font,
             renderer,
             framebuffer,
@@ -958,6 +967,8 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
 
     state.frame_image.update(&state.gpu);
     let frame_texture_id = sync_frame_texture(state);
+    // With the hand overlay on, the Frame View shows the frame with the hands drawn over it instead of the bare image
+    let frame_texture_id = sync_hand_overlay(state).or(frame_texture_id);
 
     let open_file_label = state
         .sequence
@@ -970,6 +981,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         show_camera_marker: state.settings.show_camera_marker,
         free_camera: state.settings.free_camera,
         per_track_coloring: state.settings.per_track_coloring,
+        hand_overlay: state.settings.show_hand_overlay,
         msaa_samples: state.renderer.sample_count(),
         msaa_options: state.gpu.msaa_counts.clone(),
         open_file: open_file_label,
@@ -1090,11 +1102,14 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
     state.viewport_hovered = viewport_result.hovered;
     state.settings.hand_translucent = menu_result.state.hand_translucent;
     state.settings.show_camera_marker = menu_result.state.show_camera_marker;
+    state.settings.show_hand_overlay = menu_result.state.hand_overlay;
     if menu_result.state.msaa_samples != state.renderer.sample_count() {
         // Switch live: rebuild the pipelines and the multisampled targets together so they always agree
         let samples = state.gpu.resolve_sample_count(menu_result.state.msaa_samples);
         state.renderer.set_sample_count(&state.gpu, samples);
         state.framebuffer.set_sample_count(&state.gpu, samples);
+        state.hand_overlay.set_sample_count(&state.gpu, samples);
+        state.overlay_key = None;
         state.settings.msaa_samples = samples;
     }
     if menu_result.state.free_camera != state.camera_is_free {
@@ -1266,6 +1281,73 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         state.window_shown = true;
         state.window.set_visible(true);
         state.window.focus_window();
+    }
+}
+
+/// What the hand overlay's last render was built from; the overlay is redrawn only when one of these changes.
+#[derive(Clone, Copy, PartialEq)]
+struct OverlayKey {
+    sequence_id: u64,
+    frame: usize,
+    per_track_coloring: bool,
+    image_generation: u64,
+    image_version: u64,
+    sample_count: u32,
+}
+
+/// Draws the current frame's hands over the frame image with the WiLoR demo camera, when the hand overlay is on and
+/// there is a frame image to draw them on, and returns the UI texture showing the result.
+fn sync_hand_overlay(state: &mut AppState) -> Option<TextureId> {
+    if !state.settings.show_hand_overlay {
+        return None;
+    }
+    let seq = state.sequence.as_ref()?;
+    let hands = seq.load_frame(state.current_frame)?;
+    let image_view = state.frame_image.view()?;
+    let size = [state.frame_image.width(), state.frame_image.height()];
+    if size[0] == 0 || size[1] == 0 {
+        return None;
+    }
+
+    let key = OverlayKey {
+        sequence_id: state.active_sequence_id.load(Ordering::SeqCst),
+        frame: state.current_frame,
+        per_track_coloring: state.settings.per_track_coloring,
+        image_generation: state.frame_image.generation(),
+        image_version: state.frame_image.version(),
+        sample_count: state.hand_overlay.sample_count(),
+    };
+    if state.overlay_key != Some(key) {
+        // The demo focal length is defined for the image the hands were fitted on; the overlay is drawn at the frame
+        // image's resolution, so the camera scales with it.
+        let (fit_w, fit_h) = hands
+            .iter()
+            .find_map(|hand| hand.camera)
+            .map_or((size[0], size[1]), |camera| (camera.img_w.max(1), camera.img_h.max(1)));
+        let demo_focal = overlay_focal_length(fit_w, fit_h);
+        let render_focal = demo_focal * size[0] as f32 / fit_w as f32;
+        let meshes = prepare_overlay_hands(&state.gpu, hands, key.per_track_coloring, demo_focal);
+        state
+            .hand_overlay
+            .render(&state.gpu, image_view, size, render_focal, &meshes);
+        state.overlay_key = Some(key);
+    }
+
+    let view = state.hand_overlay.color_view()?;
+    let generation = state.hand_overlay.generation();
+    match state.overlay_texture {
+        Some(id) if state.overlay_generation == generation => Some(id.texture_id()),
+        Some(id) => {
+            state.imgui_renderer.update_external_texture(id, view).ok()?;
+            state.overlay_generation = generation;
+            Some(id.texture_id())
+        }
+        None => {
+            let id = state.imgui_renderer.register_external_texture(view).ok()?;
+            state.overlay_texture = Some(id);
+            state.overlay_generation = generation;
+            Some(id.texture_id())
+        }
     }
 }
 
