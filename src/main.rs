@@ -31,6 +31,8 @@ use infant_hand_motion_viewer::ui::{
 use infant_hand_motion_viewer::util::WorkerQueue;
 use infant_hand_motion_viewer::util::window_placement::{MonitorRect, is_position_reachable};
 
+/// Longest the window stays hidden waiting for its first presented frame.
+const FIRST_FRAME_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 const PLAYBACK_FPS: f64 = 30.0;
 const SCRUB_INITIAL_DELAY: f64 = 0.25;
 const SCRUB_REPEAT_INTERVAL: f64 = 0.03;
@@ -135,6 +137,8 @@ struct AppState {
 
     // Timing
     last_frame_time: Instant,
+    created_at: Instant,
+    window_shown: bool,
 }
 
 impl AppState {
@@ -257,6 +261,8 @@ impl ApplicationHandler for AppRunner {
 
         let mut window_attributes = Window::default_attributes()
             .with_title("Infant Hand Motion Viewer")
+            // Stay hidden until the first frame has been presented so the window never flashes an empty surface
+            .with_visible(false)
             .with_inner_size(LogicalSize::new(
                 self.settings.window_width as f64,
                 self.settings.window_height as f64,
@@ -466,6 +472,8 @@ impl ApplicationHandler for AppRunner {
             pending_open_file: None,
             pending_remote_restore: None,
             last_frame_time: Instant::now(),
+            created_at: Instant::now(),
+            window_shown: false,
         };
 
         if let Some(last_folder) = app_state.settings.last_folder.clone()
@@ -484,6 +492,9 @@ impl ApplicationHandler for AppRunner {
             let start_frame = app_state.settings.last_frame;
             app_state.open_sequence(&OpenSource::Local(last_folder), start_frame);
         }
+
+        // Render the first frame while the window is still hidden; it is shown once that frame is presented
+        render_app_frame(&mut app_state, event_loop);
 
         self.state = Some(app_state);
     }
@@ -645,7 +656,12 @@ impl ApplicationHandler for AppRunner {
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        if let Some(ref state) = self.state {
+        if let Some(ref mut state) = self.state {
+            // If no frame could be presented (e.g. the surface keeps being lost), still show the window eventually
+            if !state.window_shown && state.created_at.elapsed() > FIRST_FRAME_TIMEOUT {
+                state.window_shown = true;
+                state.window.set_visible(true);
+            }
             state.window.request_redraw();
         }
     }
@@ -1225,6 +1241,12 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
     state.gpu.queue.submit([encoder.finish()]);
     state.window.pre_present_notify();
     state.gpu.queue.present(surface_texture);
+
+    if !state.window_shown {
+        state.window_shown = true;
+        state.window.set_visible(true);
+        state.window.focus_window();
+    }
 }
 
 /// Keeps the UI's registration of the frame image texture pointed at its current GPU texture.
