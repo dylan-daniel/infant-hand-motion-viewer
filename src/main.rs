@@ -766,6 +766,19 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         state.remote_fetch_worker.clear();
         state.frame_stream.clear();
         state.streamed_frame = None;
+        if !state.current_remote_path.is_empty()
+            && let Some(ref seq) = state.sequence
+        {
+            let frame_numbers = seq
+                .frame_numbers()
+                .iter()
+                .filter(|&&n| n > 0)
+                .map(|&n| n as u32)
+                .collect();
+            state
+                .frame_stream
+                .set_sequence(&state.current_remote_path, frame_numbers);
+        }
     }
 
     // Camera WASD / QE movement
