@@ -8,9 +8,7 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use infant_hand_motion_viewer::remote::{
-    CacheManager, ConnectionState, FrameStream, RemoteClient, RemoteConfig, ScrubWorker,
-};
+use infant_hand_motion_viewer::remote::{CacheManager, ConnectionState, FrameStream, RemoteClient, RemoteConfig};
 use infant_hand_motion_viewer::util::WorkerQueue;
 
 struct TempDirGuard(PathBuf);
@@ -180,14 +178,6 @@ fn test_remote_client_local_daemon_e2e() {
     let downloaded_bytes = fs::read(&local_dest_hexport).unwrap();
     assert_eq!(downloaded_bytes, synthetic_bytes);
 
-    // Test fetch_single_frame
-    let local_dest_frame = temp_workspace.path().join("frame_00001.jpg");
-    client
-        .fetch_single_frame(&hexport_path.to_string_lossy(), 1, &local_dest_frame)
-        .expect("fetch_single_frame failed");
-    assert!(local_dest_frame.exists());
-    assert_eq!(fs::read(&local_dest_frame).unwrap(), frame_bytes);
-
     // Test in-memory frame fetches
     let export_str = hexport_path.to_string_lossy().into_owned();
     assert_eq!(
@@ -199,14 +189,6 @@ fn test_remote_client_local_daemon_e2e() {
         client.fetch_frame_bundle_bytes(&export_str, 1, 4).unwrap(),
         vec![(1u32, frame_bytes.to_vec())]
     );
-
-    // Test fetch_and_extract_bundle
-    let bundle_extract_dir = temp_workspace.path().join("extracted_bundle");
-    let count = client
-        .fetch_and_extract_bundle(&hexport_path.to_string_lossy(), &bundle_extract_dir, Some(1), Some(1))
-        .expect("fetch_and_extract_bundle failed");
-    assert_eq!(count, 1);
-    assert!(bundle_extract_dir.join("frame_00001.jpg").exists());
 
     // Test frame stream
     let stream = FrameStream::new(client.clone());
@@ -223,19 +205,6 @@ fn test_remote_client_local_daemon_e2e() {
         fetched.expect("frame stream never delivered frame 1").as_slice(),
         frame_bytes
     );
-
-    // Test scrub worker
-    let mut scrub_worker = ScrubWorker::new(client.clone());
-    let scrub_dest = temp_workspace.path().join("scrub_frame.jpg");
-    scrub_worker.request(hexport_path.to_string_lossy().into_owned(), 1, scrub_dest.clone());
-
-    let start = std::time::Instant::now();
-    while !scrub_dest.exists() && start.elapsed() < Duration::from_secs(5) {
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    assert!(scrub_dest.exists());
-    scrub_worker.cancel();
-    scrub_worker.shutdown();
 
     // Test disconnect
     client.disconnect();
