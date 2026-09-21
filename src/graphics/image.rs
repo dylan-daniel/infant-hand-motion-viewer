@@ -15,6 +15,7 @@ struct DecodedImage {
 
 struct ImageShared {
     desired_path: String,
+    desired_bytes: Option<Arc<Vec<u8>>>,
     worker_busy: bool,
     pending: Option<DecodedImage>,
 }
@@ -42,6 +43,7 @@ impl ImageTexture {
             height: 0,
             shared: Arc::new(Mutex::new(ImageShared {
                 desired_path: String::new(),
+                desired_bytes: None,
                 worker_busy: false,
                 pending: None,
             })),
@@ -52,6 +54,15 @@ impl ImageTexture {
     /// Request `path` for display. Decodes asynchronously off the render thread.
     /// Returns true if a valid texture is currently available.
     pub fn load(&mut self, gpu: &Gpu, path: &str) -> bool {
+        self.request(gpu, path, None)
+    }
+
+    /// Like [`load`](Self::load), but decodes already-fetched encoded image `bytes`; `key` identifies the image.
+    pub fn load_bytes(&mut self, gpu: &Gpu, key: &str, bytes: Arc<Vec<u8>>) -> bool {
+        self.request(gpu, key, Some(bytes))
+    }
+
+    fn request(&mut self, gpu: &Gpu, path: &str, bytes: Option<Arc<Vec<u8>>>) -> bool {
         self.upload_ready(gpu);
 
         let mut submit = false;
@@ -59,6 +70,7 @@ impl ImageTexture {
             let mut shared = self.shared.lock().unwrap();
             if path != shared.desired_path || (self.texture.is_none() && !shared.worker_busy) {
                 shared.desired_path = path.to_string();
+                shared.desired_bytes = bytes;
                 if !shared.worker_busy {
                     shared.worker_busy = true;
                     submit = true;
@@ -78,13 +90,18 @@ impl ImageTexture {
 
     fn decode_loop(shared: Arc<Mutex<ImageShared>>) {
         loop {
-            let target = {
+            let (target, bytes) = {
                 let s = shared.lock().unwrap();
-                s.desired_path.clone()
+                (s.desired_path.clone(), s.desired_bytes.clone())
             };
 
-            let decoded = if !target.is_empty() && Path::new(&target).exists() {
-                match image::open(&target) {
+            let opened = match &bytes {
+                Some(bytes) => Some(image::load_from_memory(bytes)),
+                None if !target.is_empty() && Path::new(&target).exists() => Some(image::open(&target)),
+                None => None,
+            };
+            let decoded = if let Some(opened) = opened {
+                match opened {
                     Ok(img) => {
                         let rgba = img.to_rgba8();
                         let (w, h) = rgba.dimensions();
@@ -143,6 +160,7 @@ impl ImageTexture {
                 self.path = ready.path;
                 let mut s = self.shared.lock().unwrap();
                 s.desired_path.clear();
+                s.desired_bytes = None;
             }
             return;
         }
@@ -189,6 +207,7 @@ impl ImageTexture {
         {
             let mut s = self.shared.lock().unwrap();
             s.desired_path.clear();
+            s.desired_bytes = None;
             s.pending = None;
         }
         self.release();

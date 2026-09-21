@@ -23,7 +23,7 @@ use infant_hand_motion_viewer::data::{MeshSequence, Transform, compute_transform
 use infant_hand_motion_viewer::graphics::{
     Camera, FrameGpu, Framebuffer, FreeCamera, Gpu, ImageTexture, OrbitCamera, Renderer, SceneRender, prepare_frame,
 };
-use infant_hand_motion_viewer::remote::{CacheManager, ConnectionState, RemoteClient, RemoteConfig, ScrubWorker};
+use infant_hand_motion_viewer::remote::{CacheManager, ConnectionState, FrameStream, RemoteClient, RemoteConfig};
 use infant_hand_motion_viewer::ui::{
     FileExplorer, MenuState, SourceMode, Transport, UiIcons, draw_flags_window, draw_image_window, draw_menu_bar,
     draw_remote_modal, draw_storage_modal, draw_viewport_window,
@@ -37,7 +37,6 @@ const SCRUB_REPEAT_INTERVAL: f64 = 0.03;
 struct PendingOpen {
     local_path: String,
     remote_path: String,
-    local_frames_dir: String,
 }
 
 struct DialogChannels {
@@ -115,9 +114,9 @@ struct AppState {
     remote_client: RemoteClient,
     remote_fetch_worker: Arc<WorkerQueue>,
     remote_open_worker: Arc<WorkerQueue>,
-    scrub_worker: ScrubWorker,
+    frame_stream: FrameStream,
+    streamed_frame: Option<u32>,
     current_remote_path: String,
-    current_local_frames_dir: String,
     active_sequence_id: Arc<AtomicU64>,
 
     // Native file dialogs
@@ -330,7 +329,7 @@ impl ApplicationHandler for AppRunner {
         }
 
         let remote_client = RemoteClient::new();
-        let scrub_worker = ScrubWorker::new(remote_client.clone());
+        let frame_stream = FrameStream::new(remote_client.clone());
         let remote_fetch_worker = Arc::new(WorkerQueue::new());
         let remote_open_worker = Arc::new(WorkerQueue::new());
 
@@ -394,9 +393,9 @@ impl ApplicationHandler for AppRunner {
             remote_client,
             remote_fetch_worker,
             remote_open_worker,
-            scrub_worker,
+            frame_stream,
+            streamed_frame: None,
             current_remote_path: String::new(),
-            current_local_frames_dir: String::new(),
             active_sequence_id: Arc::new(AtomicU64::new(0)),
             dialogs: DialogChannels::new(),
             pending_open_file: None,
@@ -610,7 +609,6 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             state.pending_open_file = Some(PendingOpen {
                 local_path: path.to_string_lossy().into_owned(),
                 remote_path: String::new(),
-                local_frames_dir: String::new(),
             });
         }
         state.dialogs.open_file_rx = None;
@@ -668,25 +666,12 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
     // Apply deferred open
     if let Some(pending) = state.pending_open_file.take() {
         state.current_remote_path = pending.remote_path;
-        state.current_local_frames_dir = pending.local_frames_dir;
         state.open_sequence(&pending.local_path, 0);
 
-        let seq_id = state.active_sequence_id.fetch_add(1, Ordering::SeqCst) + 1;
+        state.active_sequence_id.fetch_add(1, Ordering::SeqCst);
         state.remote_fetch_worker.clear();
-        state.scrub_worker.cancel();
-
-        if !state.current_remote_path.is_empty()
-            && state.remote_client.is_connected()
-            && let Some(ref seq) = state.sequence
-            && let Some(frame1_num) = seq.frame_number(0)
-            && frame1_num > 0
-        {
-            let dest = Path::new(&state.current_local_frames_dir).join(format!("frame_{frame1_num:05}.jpg"));
-            state
-                .scrub_worker
-                .request(state.current_remote_path.clone(), frame1_num as u32, dest);
-        }
-        let _ = seq_id;
+        state.frame_stream.clear();
+        state.streamed_frame = None;
     }
 
     // Camera WASD / QE movement
@@ -790,21 +775,28 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
                 state.loaded_frame = Some(state.current_frame);
             }
 
-            // Load video frame image if available
             if let Some(ref img_path) = seq.frame_image_path(state.current_frame) {
                 state.frame_image.load(&state.gpu, &img_path.to_string_lossy());
-            } else {
-                state.frame_image.clear();
-                if !state.current_remote_path.is_empty()
-                    && state.remote_client.is_connected()
-                    && let Some(f_num) = seq.frame_number(state.current_frame)
-                    && f_num > 0
-                {
-                    let dest = Path::new(&state.current_local_frames_dir).join(format!("frame_{f_num:05}.jpg"));
-                    state
-                        .scrub_worker
-                        .request(state.current_remote_path.clone(), f_num as u32, dest);
-                }
+                state.streamed_frame = None;
+            }
+        }
+
+        // Remote frames: keep the stream focused on the scrubber and show each frame as soon as it arrives.
+        // The previous image stays up meanwhile so scrubbing never flashes blank.
+        if !state.current_remote_path.is_empty()
+            && state.remote_client.is_connected()
+            && seq.frame_image_path(state.current_frame).is_none()
+            && let Some(f_num) = seq.frame_number(state.current_frame)
+            && f_num > 0
+        {
+            let f_num = f_num as u32;
+            state.frame_stream.set_focus(&state.current_remote_path, f_num);
+            if state.streamed_frame != Some(f_num)
+                && let Some(bytes) = state.frame_stream.get(f_num)
+            {
+                let key = format!("{}#{f_num}", state.current_remote_path);
+                state.frame_image.load_bytes(&state.gpu, &key, bytes);
+                state.streamed_frame = Some(f_num);
             }
         }
     }
@@ -1035,13 +1027,11 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
                 state.settings.remote_host.clone()
             };
             let local_export = CacheManager::get_local_export_path(&host, Path::new(&remote_path));
-            let local_frames_dir = CacheManager::get_local_frames_dir(&local_export);
 
             if CacheManager::is_export_cached(&local_export) {
                 state.pending_open_file = Some(PendingOpen {
                     local_path: local_export.to_string_lossy().into_owned(),
                     remote_path,
-                    local_frames_dir: local_frames_dir.to_string_lossy().into_owned(),
                 });
             } else {
                 let client = state.remote_client.clone();
@@ -1059,7 +1049,6 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             state.pending_open_file = Some(PendingOpen {
                 local_path: open_path,
                 remote_path: String::new(),
-                local_frames_dir: String::new(),
             });
         }
     }
