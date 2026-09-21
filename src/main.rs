@@ -426,44 +426,7 @@ impl ApplicationHandler for AppRunner {
 
         match event {
             WindowEvent::CloseRequested => {
-                // Persist settings before quitting
-                if let Some(ref seq) = state.sequence {
-                    state.settings.last_folder = Some(seq.path().to_string());
-                    state.settings.last_frame = state.current_frame;
-                }
-                state.settings.active_pane = state.active_pane;
-                state.settings.playback_speed = state.playback_speed;
-                state.settings.expanded_folders = state.explorer.expanded_paths();
-                if state.camera_is_free {
-                    state.orbit_cam.set_from_free(&state.free_cam);
-                }
-                let (az, el, dist, target) = state.orbit_cam.get_state();
-                state.settings.camera_azimuth = az;
-                state.settings.camera_elevation = el;
-                state.settings.camera_distance = dist;
-                state.settings.camera_target = target;
-
-                let remote = state.remote_client.config();
-                if !remote.host.is_empty() {
-                    state.settings.remote_host = remote.host;
-                    state.settings.remote_port = remote.port;
-                    state.settings.remote_python = remote.python_bin;
-                    state.settings.remote_data_folder = remote.root_folder;
-                }
-
-                state.settings.window_fullscreen = state.window.fullscreen().is_some();
-                if !state.settings.window_fullscreen && state.window.is_minimized() != Some(true) {
-                    let scale = state.window.scale_factor();
-                    let size = state.window.inner_size().to_logical::<f64>(scale);
-                    state.settings.window_width = size.width.round().max(1.0) as u32;
-                    state.settings.window_height = size.height.round().max(1.0) as u32;
-                    if let Ok(pos) = state.window.outer_position() {
-                        state.settings.window_x = Some(pos.x);
-                        state.settings.window_y = Some(pos.y);
-                    }
-                }
-
-                let _ = state.settings.save(&state.config_path);
+                persist_settings(state);
                 event_loop.exit();
             }
             WindowEvent::Resized(size) => {
@@ -503,6 +466,7 @@ impl ApplicationHandler for AppRunner {
                                 state.show_remote_modal = false;
                                 state.show_storage_modal = false;
                             } else if !want_text {
+                                persist_settings(state);
                                 event_loop.exit();
                             }
                         }
@@ -597,6 +561,46 @@ impl ApplicationHandler for AppRunner {
             state.window.request_redraw();
         }
     }
+}
+
+/// Gather the live app state into the settings and write them to disk.
+fn persist_settings(state: &mut AppState) {
+    if let Some(ref seq) = state.sequence {
+        state.settings.last_folder = Some(seq.path().to_string());
+        state.settings.last_frame = state.current_frame;
+    }
+    state.settings.active_pane = state.active_pane;
+    state.settings.playback_speed = state.playback_speed;
+    state.settings.expanded_folders = state.explorer.expanded_paths();
+    if state.camera_is_free {
+        state.orbit_cam.set_from_free(&state.free_cam);
+    }
+    let (az, el, dist, target) = state.orbit_cam.get_state();
+    state.settings.camera_azimuth = az;
+    state.settings.camera_elevation = el;
+    state.settings.camera_distance = dist;
+    state.settings.camera_target = target;
+
+    let remote = state.remote_client.config();
+    if !remote.host.is_empty() {
+        state.settings.remote_host = remote.host;
+        state.settings.remote_port = remote.port;
+        state.settings.remote_python = remote.python_bin;
+        state.settings.remote_data_folder = remote.root_folder;
+    }
+
+    state.settings.window_fullscreen = state.window.fullscreen().is_some();
+    if !state.settings.window_fullscreen && state.window.is_minimized() != Some(true) {
+        let scale = state.window.scale_factor();
+        let size = state.window.inner_size().to_logical::<f64>(scale);
+        state.settings.window_width = size.width.round().max(1.0) as u32;
+        state.settings.window_height = size.height.round().max(1.0) as u32;
+        if let Ok(pos) = state.window.outer_position() {
+            state.settings.window_x = Some(pos.x);
+            state.settings.window_y = Some(pos.y);
+        }
+    }
+    let _ = state.settings.save(&state.config_path);
 }
 
 fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
@@ -976,6 +980,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
     }
 
     if menu_result.exit_requested {
+        persist_settings(state);
         event_loop.exit();
         return;
     }
@@ -988,6 +993,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
     if menu_result.disconnect_remote_requested {
         state.remote_client.disconnect();
         state.settings.remote_mode = false;
+        let _ = state.settings.save(&state.config_path);
         state.explorer.set_mode(SourceMode::Local);
         if let Some(ref df) = state.settings.data_folder {
             state.explorer.set_root(df);
