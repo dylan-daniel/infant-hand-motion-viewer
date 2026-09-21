@@ -2,6 +2,7 @@ pub mod geometry;
 pub mod hand_export;
 pub mod mano_model;
 pub mod mesh_sequence;
+pub mod projection;
 
 pub use geometry::{
     DEFAULT_COLOR, FINGER_COLORS, HAND_BONES, HandCamera, HandData, LEFT_HAND_COLOR, MODEL_FIT_SPAN, MeshArrays,
