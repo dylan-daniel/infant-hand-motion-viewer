@@ -418,6 +418,10 @@ impl FileExplorer {
             result.focused = ui.is_window_focused();
 
             let is_remote = self.mode == SourceMode::Remote;
+            if !is_remote && self.root_path.is_empty() {
+                Self::draw_empty_state(ui, icons, &mut result);
+                return;
+            }
             let scanning = self.scanning();
             self.draw_toolbar(ui, icons, &mut result, is_remote, scanning);
             ui.separator();
@@ -446,8 +450,6 @@ impl FileExplorer {
                         ui.text_colored([1.0, 0.4, 0.4, 1.0], format!("Scan error: {}", self.scan_error));
                     } else if is_remote {
                         ui.text_disabled("No .hexport files found on remote server.");
-                    } else if self.root_path.is_empty() {
-                        ui.text_disabled("No data folder selected.\nClick the folder button above to choose one.");
                     } else {
                         ui.text_disabled("No .hexport files found.");
                     }
@@ -455,6 +457,56 @@ impl FileExplorer {
         });
 
         result
+    }
+
+    /// Centered prompt shown while no local data folder has been chosen.
+    fn draw_empty_state(ui: &Ui, icons: &UiIcons, result: &mut ExplorerResult) {
+        let style = ui.clone_style();
+        let origin = ui.cursor_pos();
+        let avail = ui.content_region_avail();
+
+        let heading = "No data folder selected";
+        let hint = "Choose a folder to scan for .hexport files.";
+        let button_label = "Choose Data Folder";
+        let icon_size = 48.0;
+        let line_height = ui.text_line_height();
+        let gap = line_height * 0.6;
+        let button_width = ui.calc_text_size(button_label)[0] + style.frame_padding()[0] * 2.0;
+
+        let mut block_height = line_height + style.item_spacing()[1] + line_height + gap + ui.frame_height();
+        if icons.change_root.is_some() {
+            block_height += icon_size + gap;
+        }
+        let top = origin[1] + ((avail[1] - block_height) * 0.4).max(0.0);
+        ui.set_cursor_pos([origin[0], top]);
+
+        let center_x = |width: f32| ui.set_cursor_pos([origin[0] + (avail[0] - width) * 0.5, ui.cursor_pos()[1]]);
+
+        if let Some(tex) = icons.change_root {
+            center_x(icon_size);
+            let pos = ui.cursor_screen_pos();
+            ui.get_window_draw_list().add_image(
+                tex,
+                pos,
+                [pos[0] + icon_size, pos[1] + icon_size],
+                [0.0, 0.0],
+                [1.0, 1.0],
+                ui.style_color(StyleColor::TextDisabled),
+            );
+            ui.set_cursor_pos([ui.cursor_pos()[0], ui.cursor_pos()[1] + icon_size + gap]);
+        }
+
+        center_x(ui.calc_text_size(heading)[0]);
+        ui.text(heading);
+        ui.spacing();
+        center_x(ui.calc_text_size(hint)[0]);
+        ui.text_disabled(hint);
+
+        ui.set_cursor_pos([ui.cursor_pos()[0], ui.cursor_pos()[1] + gap]);
+        center_x(button_width);
+        if ui.button(button_label) {
+            result.choose_root_requested = true;
+        }
     }
 
     /// Path label (`<path>` or `<host>:<path>`, clipped to the space left of the buttons) with change and refresh buttons on the right.
