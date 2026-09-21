@@ -1,8 +1,7 @@
 use dear_imgui_rs::{Condition, Key, StyleColor, Ui, WindowFlags, sys};
 
-use crate::remote::{CacheManager, ConnectionState, RemoteClient, RemoteConfig};
+use crate::remote::{ConnectionState, RemoteClient, RemoteConfig};
 
-const STORAGE_MODAL_WIDTH: f32 = 540.0;
 const REMOTE_MODAL_WIDTH: f32 = 720.0;
 
 /// Center the next modal on the main viewport at a fixed width that auto-fits its height.
@@ -105,39 +104,5 @@ pub fn draw_remote_modal(ui: &Ui, is_open: &mut bool, config: &mut RemoteConfig,
             close = true;
         }
         close
-    });
-}
-
-/// Draw the centered modal dialog for local disk storage and cache configuration.
-pub fn draw_storage_modal(ui: &Ui, is_open: &mut bool, cache_folder: &mut String, browse_requested: &mut bool) {
-    draw_modal(ui, "Storage & Cache Settings", STORAGE_MODAL_WIDTH, is_open, || {
-        ui.text("Local File & Cache Management");
-        ui.separator();
-
-        let current_root = CacheManager::get_cache_root();
-        ui.text(format!("Cache Directory:\n{}", current_root.display()));
-
-        if ui.button("Change Folder...") {
-            *browse_requested = true;
-        }
-        ui.same_line();
-        if ui.button("Reset to Default") {
-            cache_folder.clear();
-            CacheManager::set_custom_cache_root(None);
-        }
-
-        ui.separator();
-
-        let size_bytes = CacheManager::calculate_cache_size_bytes();
-        let size_mb = (size_bytes as f64) / (1024.0 * 1024.0);
-        ui.text(format!("Current Cache Size: {size_mb:.2} MB"));
-
-        if ui.button("Clear Cache Now") {
-            let _ = CacheManager::clear_cache();
-        }
-
-        ui.separator();
-
-        ui.button("Close")
     });
 }

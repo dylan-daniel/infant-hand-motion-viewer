@@ -124,7 +124,6 @@ fn test_menu_state_and_result() {
     assert!(!result.export_file_requested);
     assert!(!result.open_remote_modal_requested);
     assert!(!result.disconnect_remote_requested);
-    assert!(!result.open_storage_modal_requested);
     assert!(!result.exit_requested);
 }
 

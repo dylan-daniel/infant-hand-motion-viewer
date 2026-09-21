@@ -23,10 +23,10 @@ use infant_hand_motion_viewer::data::{MeshSequence, Transform, compute_transform
 use infant_hand_motion_viewer::graphics::{
     Camera, FrameGpu, Framebuffer, FreeCamera, Gpu, ImageTexture, OrbitCamera, Renderer, SceneRender, prepare_frame,
 };
-use infant_hand_motion_viewer::remote::{CacheManager, ConnectionState, FrameStream, RemoteClient, RemoteConfig};
+use infant_hand_motion_viewer::remote::{ConnectionState, FrameStream, RemoteClient, RemoteConfig};
 use infant_hand_motion_viewer::ui::{
     FileExplorer, MenuState, SourceMode, Transport, UiIcons, draw_flags_window, draw_image_window, draw_menu_bar,
-    draw_remote_modal, draw_storage_modal, draw_viewport_window,
+    draw_remote_modal, draw_viewport_window,
 };
 use infant_hand_motion_viewer::util::WorkerQueue;
 use infant_hand_motion_viewer::util::window_placement::{MonitorRect, is_position_reachable};
@@ -49,7 +49,6 @@ struct PendingOpen {
 struct DialogChannels {
     open_file_rx: Option<crossbeam_channel::Receiver<Option<PathBuf>>>,
     data_folder_rx: Option<crossbeam_channel::Receiver<Option<PathBuf>>>,
-    cache_folder_rx: Option<crossbeam_channel::Receiver<Option<PathBuf>>>,
 }
 
 impl DialogChannels {
@@ -57,7 +56,6 @@ impl DialogChannels {
         Self {
             open_file_rx: None,
             data_folder_rx: None,
-            cache_folder_rx: None,
         }
     }
 }
@@ -118,7 +116,6 @@ struct AppState {
     restore_focus_frames: i32,
     explorer: FileExplorer,
     show_remote_modal: bool,
-    show_storage_modal: bool,
     remote_config: RemoteConfig,
     remote_client: RemoteClient,
     remote_fetch_worker: Arc<WorkerQueue>,
@@ -391,10 +388,6 @@ impl ApplicationHandler for AppRunner {
             root_folder: self.settings.remote_data_folder.clone(),
         };
 
-        if !self.settings.cache_folder.is_empty() {
-            CacheManager::set_custom_cache_root(Some(PathBuf::from(&self.settings.cache_folder)));
-        }
-
         let remote_client = RemoteClient::new();
         let frame_stream = FrameStream::new(remote_client.clone());
         let remote_fetch_worker = Arc::new(WorkerQueue::new());
@@ -458,7 +451,6 @@ impl ApplicationHandler for AppRunner {
             restore_focus_frames: 3,
             explorer,
             show_remote_modal: false,
-            show_storage_modal: false,
             remote_config,
             remote_client,
             remote_fetch_worker,
@@ -536,7 +528,7 @@ impl ApplicationHandler for AppRunner {
                     state.keys_down.remove(&key);
                 }
 
-                let modal_open = state.show_remote_modal || state.show_storage_modal;
+                let modal_open = state.show_remote_modal;
                 let want_text = state.imgui.io().want_text_input();
 
                 if pressed && !repeat {
@@ -544,7 +536,6 @@ impl ApplicationHandler for AppRunner {
                         KeyCode::Escape => {
                             if modal_open {
                                 state.show_remote_modal = false;
-                                state.show_storage_modal = false;
                             } else if !want_text {
                                 persist_settings(state);
                                 event_loop.exit();
@@ -590,7 +581,7 @@ impl ApplicationHandler for AppRunner {
                 if button == MouseButton::Right {
                     let pressed = el_state == ElementState::Pressed;
                     state.right_mouse_down = pressed;
-                    let modal_open = state.show_remote_modal || state.show_storage_modal;
+                    let modal_open = state.show_remote_modal;
                     if pressed && state.viewport_hovered && !modal_open {
                         if state.shift_down {
                             state.panning = true;
@@ -726,17 +717,6 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         state.dialogs.data_folder_rx = None;
     }
 
-    if let Some(ref rx) = state.dialogs.cache_folder_rx
-        && let Ok(result) = rx.try_recv()
-    {
-        if let Some(folder) = result {
-            let folder_str = folder.to_string_lossy().into_owned();
-            state.settings.cache_folder = folder_str.clone();
-            CacheManager::set_custom_cache_root(Some(PathBuf::from(folder_str)));
-        }
-        state.dialogs.cache_folder_rx = None;
-    }
-
     // Track the remote connection: point the explorer at the remote tree once connected, fall back to local otherwise
     state.remote_client.poll();
     if state.remote_client.consume_just_connected() {
@@ -785,7 +765,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
     }
 
     // Camera WASD / QE movement
-    let modal_open = state.show_remote_modal || state.show_storage_modal;
+    let modal_open = state.show_remote_modal;
     let want_text = state.imgui.io().want_text_input();
     if !want_text && !modal_open {
         let mut forward = 0.0f32;
@@ -972,7 +952,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         ),
     );
 
-    let (menu_result, explorer_result, viewport_result, image_result, browse_cache_requested) = {
+    let (menu_result, explorer_result, viewport_result, image_result) = {
         let ui = state.imgui.frame();
 
         let menu_result = draw_menu_bar(ui, menu_state);
@@ -1042,14 +1022,6 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             &state.remote_client,
         );
 
-        let mut browse_cache = false;
-        draw_storage_modal(
-            ui,
-            &mut state.show_storage_modal,
-            &mut state.settings.cache_folder,
-            &mut browse_cache,
-        );
-
         if state.restore_focus_frames > 0 {
             state.restore_focus_frames -= 1;
             ui.set_window_focus(Some(if state.active_pane == 1 {
@@ -1064,7 +1036,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             .prepare_render(ui, &state.window)
             .expect("failed to prepare imgui render");
 
-        (menu_result, explorer_result, v_res, i_res, browse_cache)
+        (menu_result, explorer_result, v_res, i_res)
     };
 
     state.settings.show_controls = viewport_result.show_controls;
@@ -1086,9 +1058,6 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
     }
     if menu_result.open_remote_modal_requested || explorer_result.change_remote_requested {
         state.show_remote_modal = true;
-    }
-    if menu_result.open_storage_modal_requested {
-        state.show_storage_modal = true;
     }
     if menu_result.disconnect_remote_requested {
         state.remote_client.disconnect();
@@ -1119,15 +1088,6 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             let _ = tx.send(res);
         });
         state.dialogs.data_folder_rx = Some(rx);
-    }
-
-    if browse_cache_requested && state.dialogs.cache_folder_rx.is_none() {
-        let (tx, rx) = crossbeam_channel::bounded(1);
-        std::thread::spawn(move || {
-            let res = rfd::FileDialog::new().pick_folder();
-            let _ = tx.send(res);
-        });
-        state.dialogs.cache_folder_rx = Some(rx);
     }
 
     if let Some(open_path) = explorer_result.open_file {

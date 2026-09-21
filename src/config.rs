@@ -90,9 +90,6 @@ pub struct Config {
     pub remote_data_folder: String,
 
     #[serde(default)]
-    pub cache_folder: String,
-
-    #[serde(default)]
     pub window_x: Option<i32>,
     #[serde(default)]
     pub window_y: Option<i32>,
@@ -137,7 +134,6 @@ impl Default for Config {
             remote_port: default_remote_port(),
             remote_python: default_remote_python(),
             remote_data_folder: String::new(),
-            cache_folder: String::new(),
             window_x: None,
             window_y: None,
             window_width: default_window_width(),

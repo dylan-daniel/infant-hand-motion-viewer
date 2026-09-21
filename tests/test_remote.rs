@@ -8,7 +8,7 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use infant_hand_motion_viewer::remote::{CacheManager, ConnectionState, FrameStream, RemoteClient, RemoteConfig};
+use infant_hand_motion_viewer::remote::{ConnectionState, FrameStream, RemoteClient, RemoteConfig};
 use infant_hand_motion_viewer::util::WorkerQueue;
 
 struct TempDirGuard(PathBuf);
@@ -33,70 +33,6 @@ impl Drop for TempDirGuard {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
     }
-}
-
-#[test]
-fn test_cache_manager_operations() {
-    let temp_dir = TempDirGuard::new("test_cache_manager");
-    CacheManager::set_custom_cache_root(Some(temp_dir.path().to_path_buf()));
-
-    assert_eq!(CacheManager::get_cache_root(), temp_dir.path());
-    assert_eq!(
-        CacheManager::get_custom_cache_root(),
-        Some(temp_dir.path().to_path_buf())
-    );
-
-    // Sanitize identifier tests
-    assert_eq!(
-        CacheManager::sanitize_identifier("user@server.com:22"),
-        "user_server_com_22"
-    );
-    assert_eq!(CacheManager::sanitize_identifier(""), "default");
-    assert_eq!(CacheManager::sanitize_identifier("host-1_valid"), "host-1_valid");
-
-    // Local export path mapping
-    let remote_path = Path::new("/data/experiments/session1/export__30fps__hash.hexport");
-    let local_path = CacheManager::get_local_export_path("test-server", remote_path);
-    let expected = temp_dir
-        .path()
-        .join("test-server")
-        .join("session1")
-        .join("export__30fps__hash.hexport");
-    assert_eq!(local_path, expected);
-
-    // Local frames directory mapping
-    let frames_dir = CacheManager::get_local_frames_dir(&local_path);
-    let expected_frames = temp_dir
-        .path()
-        .join("test-server")
-        .join("session1")
-        .join("frames")
-        .join("export__30fps");
-    assert_eq!(frames_dir, expected_frames);
-
-    // Cache existence and verification
-    assert!(!CacheManager::is_export_cached(&local_path));
-    fs::create_dir_all(local_path.parent().unwrap()).unwrap();
-    fs::write(&local_path, b"test export content").unwrap();
-    assert!(CacheManager::is_export_cached(&local_path));
-
-    // Frames cache verification
-    assert!(!CacheManager::are_frames_cached(&frames_dir));
-    fs::create_dir_all(&frames_dir).unwrap();
-    assert!(!CacheManager::are_frames_cached(&frames_dir));
-    fs::write(frames_dir.join("frame_00001.jpg"), b"fake_jpeg").unwrap();
-    assert!(CacheManager::are_frames_cached(&frames_dir));
-
-    // Cache size calculation
-    assert!(CacheManager::calculate_cache_size_bytes() > 0);
-
-    // Cache clearing
-    CacheManager::clear_cache().unwrap();
-    assert_eq!(CacheManager::calculate_cache_size_bytes(), 0);
-    assert!(!CacheManager::is_export_cached(&local_path));
-
-    // Revert custom cache root
-    CacheManager::set_custom_cache_root(None);
 }
 
 #[test]

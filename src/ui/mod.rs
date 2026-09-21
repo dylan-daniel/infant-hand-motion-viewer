@@ -19,7 +19,7 @@ pub use flags::draw_flags_window;
 pub use icons::UiIcons;
 pub use image_view::{ImageViewResult, draw_image_window};
 pub use menu_bar::{MenuResult, MenuState, draw_menu_bar};
-pub use modals::{draw_remote_modal, draw_storage_modal};
+pub use modals::draw_remote_modal;
 pub use transport::{FLAG_COLORS, FLAG_LAYERS, FLAG_NAMES, FlagLayer, Transport, TransportState, draw_transport_bar};
 pub use viewport::{ViewportResult, draw_viewport_window};
 

@@ -18,7 +18,6 @@ pub struct MenuResult {
     pub export_file_requested: bool,
     pub open_remote_modal_requested: bool,
     pub disconnect_remote_requested: bool,
-    pub open_storage_modal_requested: bool,
     pub exit_requested: bool,
 }
 
@@ -29,7 +28,6 @@ pub fn draw_menu_bar(ui: &Ui, mut state: MenuState) -> MenuResult {
         export_file_requested: false,
         open_remote_modal_requested: false,
         disconnect_remote_requested: false,
-        open_storage_modal_requested: false,
         exit_requested: false,
     };
 
@@ -76,10 +74,6 @@ pub fn draw_menu_bar(ui: &Ui, mut state: MenuState) -> MenuResult {
                          sequence with no tracking/classification data is never filtered.",
                     );
                 });
-            }
-            ui.separator();
-            if ui.menu_item("Storage & Cache Settings...") {
-                result.open_storage_modal_requested = true;
             }
         });
 
