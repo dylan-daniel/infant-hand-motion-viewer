@@ -13,7 +13,6 @@ pub struct UiIcons {
     pub refresh: Option<TextureId>,
     pub play: Option<TextureId>,
     pub pause: Option<TextureId>,
-    pub speed: Option<TextureId>,
     registered: Vec<(ExternalTextureId, wgpu::Texture)>,
 }
 
@@ -34,7 +33,6 @@ impl UiIcons {
         let refresh = load(assets::ICON_REFRESH);
         let play = load(assets::ICON_PLAY);
         let pause = load(assets::ICON_PAUSE);
-        let speed = load(assets::ICON_SPEED);
         Self {
             folder_closed,
             folder_open,
@@ -43,7 +41,6 @@ impl UiIcons {
             refresh,
             play,
             pause,
-            speed,
             registered,
         }
     }

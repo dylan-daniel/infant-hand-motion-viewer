@@ -19,7 +19,6 @@ pub const ICON_REFRESH: &[u8] = include_bytes!("../assets/icons/folder-sync.png"
 // ── Transport bar icons ─────────────────────────
 pub const ICON_PLAY: &[u8] = include_bytes!("../assets/icons/play.png");
 pub const ICON_PAUSE: &[u8] = include_bytes!("../assets/icons/pause.png");
-pub const ICON_SPEED: &[u8] = include_bytes!("../assets/icons/gauge.png");
 
 /// Remote daemon script, installed to `~/.infant-hand-motion-viewer/` at connect time.
 pub const VIEWER_DAEMON: &str = include_str!("../scripts/viewer_daemon.py");

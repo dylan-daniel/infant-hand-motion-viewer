@@ -153,3 +153,67 @@ fn test_transport_state_and_flag_constants() {
         assert!((color[3] - 0.85).abs() < 1e-4);
     }
 }
+
+#[test]
+fn test_playback_speed_button_cycles_through_the_presets() {
+    use infant_hand_motion_viewer::ui::{PLAYBACK_SPEEDS, next_playback_speed};
+
+    assert_eq!(PLAYBACK_SPEEDS, [1.0, 2.0, 4.0]);
+    assert_eq!(next_playback_speed(1.0), 2.0);
+    assert_eq!(next_playback_speed(2.0), 4.0);
+    assert_eq!(next_playback_speed(4.0), 1.0);
+}
+
+#[test]
+fn test_playback_speed_outside_the_presets_moves_to_the_next_faster_one() {
+    use infant_hand_motion_viewer::ui::next_playback_speed;
+
+    assert_eq!(next_playback_speed(0.5), 1.0);
+    assert_eq!(next_playback_speed(1.5), 2.0);
+    assert_eq!(next_playback_speed(3.0), 4.0);
+    assert_eq!(next_playback_speed(8.0), 1.0);
+}
+
+/// Dear ImGui allows one active context at a time, so tests that build one must not overlap.
+static IMGUI_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Content start (the window padding) of a tooltip opened inside a window that pushed zero window padding.
+fn tooltip_content_start(show: impl FnOnce(&dear_imgui_rs::Ui, &mut dyn FnMut())) -> [f32; 2] {
+    use dear_imgui_rs::{Context, StyleVar, Window};
+
+    let _serial = IMGUI_TEST_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut context = Context::create();
+    context.io_mut().set_display_size([800.0, 600.0]);
+    context.io_mut().set_delta_time(1.0 / 60.0);
+    context
+        .font_atlas()
+        .try_claim_legacy_renderer()
+        .expect("font atlas")
+        .build();
+    let ui = context.frame();
+
+    let mut start = [-1.0, -1.0];
+    let _zero = ui.push_style_var(StyleVar::WindowPadding([0.0, 0.0]));
+    Window::new(ui, "scene like").build(|| {
+        show(ui, &mut || start = ui.cursor_pos());
+    });
+    start
+}
+
+#[test]
+fn test_padded_tooltip_keeps_theme_padding_inside_a_zero_padding_window() {
+    use infant_hand_motion_viewer::ui::{padded_tooltip, remember_theme_window_padding, theme_window_padding};
+
+    remember_theme_window_padding([9.0, 7.0]);
+    assert_eq!(theme_window_padding(), [9.0, 7.0]);
+
+    let start = tooltip_content_start(|ui, record| padded_tooltip(ui, record));
+    assert_eq!(start, [9.0, 7.0], "tooltip content must start after the theme padding");
+}
+
+#[test]
+fn test_plain_tooltip_in_a_zero_padding_window_has_no_padding() {
+    // Documents the behaviour padded_tooltip works around: a tooltip inherits the window's pushed padding.
+    let start = tooltip_content_start(|ui, record| ui.tooltip(record));
+    assert_eq!(start, [0.0, 0.0]);
+}

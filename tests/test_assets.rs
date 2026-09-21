@@ -18,5 +18,4 @@ fn test_embedded_assets_presence() {
     assert!(!assets::ICON_REFRESH.is_empty());
     assert!(!assets::ICON_PLAY.is_empty());
     assert!(!assets::ICON_PAUSE.is_empty());
-    assert!(!assets::ICON_SPEED.is_empty());
 }

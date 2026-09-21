@@ -1,11 +1,20 @@
-use dear_imgui_rs::{StyleColor, StyleVar, Ui};
+use dear_imgui_rs::{StyleColor, Ui};
 
 use crate::data::mesh_sequence::MeshSequence;
 use crate::ui::PLAYBACK_BAR_HEIGHT;
 use crate::ui::icons::UiIcons;
 
-pub const MIN_PLAYBACK_SPEED: f32 = 0.5;
-pub const MAX_PLAYBACK_SPEED: f32 = 4.0;
+/// Playback speeds the speed button cycles through.
+pub const PLAYBACK_SPEEDS: [f32; 3] = [1.0, 2.0, 4.0];
+
+/// The speed after `current` in [`PLAYBACK_SPEEDS`]: the next faster one, wrapping back to the slowest.
+/// A speed that isn't in the list (say from a hand-edited config) moves up to the next faster preset.
+pub fn next_playback_speed(current: f32) -> f32 {
+    PLAYBACK_SPEEDS
+        .into_iter()
+        .find(|&speed| speed > current + 1e-3)
+        .unwrap_or(PLAYBACK_SPEEDS[0])
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct FlagLayer {
@@ -351,7 +360,13 @@ pub fn draw_transport_bar(
     let label = format!("frame {} / {}", state.current_frame + 1, transport.frame_count);
     let label_width = ui.calc_text_size(&label)[0];
     let spacing = ui.clone_style().item_spacing()[0];
-    let speed_button_width = button_width;
+    // Sized for the widest label so the button, and with it the slider, keeps its width as the speed changes
+    let speed_label = format!("{:.1}x", state.speed);
+    let speed_text_width = PLAYBACK_SPEEDS
+        .iter()
+        .map(|&speed| ui.calc_text_size(format!("{speed:.1}x"))[0])
+        .fold(ui.calc_text_size(&speed_label)[0], f32::max);
+    let speed_button_width = speed_text_width + ui.clone_style().frame_padding()[0] * 2.0;
     let slider_width =
         (width - 8.0 - button_width - spacing - label_width - spacing - speed_button_width - spacing - 8.0).max(1.0);
     ui.set_next_item_width(slider_width);
@@ -367,65 +382,16 @@ pub fn draw_transport_bar(
     ui.same_line();
     ui.text(&label);
 
-    // Speed button
+    // Speed button: cycles through the preset speeds
     ui.same_line();
-    let speed_popup = "transport_speed_popup";
-    if let Some(tex) = icons.speed {
-        let icon_size = ui.current_font_size();
-        let text_color = ui.style_color(StyleColor::Text);
-        if ui
-            .image_button_config("transport_speed", tex, [icon_size, icon_size])
-            .tint_color(text_color)
-            .bg_color([0.0, 0.0, 0.0, 0.0])
-            .build()
-        {
-            ui.open_popup(speed_popup);
-        }
-    } else {
-        let speed_label = format!("{:.1}x", state.speed);
-        if ui.button(&speed_label) {
-            ui.open_popup(speed_popup);
-        }
+    if ui.button_with_size(&speed_label, [speed_button_width, 0.0]) {
+        state.speed = next_playback_speed(state.speed);
     }
     if ui.is_item_hovered() {
-        ui.tooltip(|| {
-            ui.text(format!("Playback speed ({:.1}x)", state.speed));
+        crate::ui::padded_tooltip(ui, || {
+            ui.text("Playback speed");
         });
     }
-
-    // Anchor popup above button
-    let button_min = ui.item_rect_min();
-    unsafe {
-        dear_imgui_rs::sys::igSetNextWindowPos(
-            dear_imgui_rs::sys::ImVec2 {
-                x: button_min[0],
-                y: button_min[1] - spacing,
-            },
-            dear_imgui_rs::sys::ImGuiCond_Always,
-            dear_imgui_rs::sys::ImVec2 { x: 0.0, y: 1.0 },
-        );
-    }
-    let slider_box_width = 18.0;
-    let slider_box_height = 140.0;
-    let pad_x = ((speed_button_width - slider_box_width) * 0.5).max(4.0);
-    let _pop_col = ui.push_style_color(StyleColor::PopupBg, [0.0, 0.0, 0.0, 1.0]);
-    let _pop_pad = ui.push_style_var(StyleVar::WindowPadding([pad_x, pad_x]));
-    ui.popup(speed_popup, || {
-        if ui.v_slider_f32(
-            "##speed",
-            [slider_box_width, slider_box_height],
-            &mut state.speed,
-            MIN_PLAYBACK_SPEED,
-            MAX_PLAYBACK_SPEED,
-        ) {
-            // speed changed
-        }
-        if ui.is_item_active() || ui.is_item_hovered() {
-            ui.tooltip(|| {
-                ui.text(format!("{:.1}x", state.speed));
-            });
-        }
-    });
 
     state
 }

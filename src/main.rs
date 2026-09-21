@@ -346,6 +346,9 @@ impl ApplicationHandler for AppRunner {
             .style_mut()
             .set_window_menu_button_position(dear_imgui_rs::Direction::None);
 
+        // Windows push their own padding; keep the theme's so tooltips can restore it
+        infant_hand_motion_viewer::ui::remember_theme_window_padding(imgui.style().window_padding());
+
         // Rasterize glyphs with FreeType using light hinting (grid-fit stems to pixel grid for crisp UI text)
         imgui
             .font_atlas()
