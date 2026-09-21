@@ -313,3 +313,43 @@ fn test_scene_renders_with_every_supported_sample_count_and_switches_live() {
         assert_eq!(framebuffer.sample_count(), samples);
     }
 }
+
+#[test]
+fn test_image_texture_version_changes_whenever_new_pixels_are_uploaded() {
+    let Some(gpu) = common::headless_gpu() else {
+        eprintln!("no GPU adapter available; skipping");
+        return;
+    };
+    let mut png = Vec::new();
+    for colour in [[255, 0, 0, 255], [0, 255, 0, 255]] {
+        let img: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_pixel(16, 16, Rgba(colour));
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+        png.push(std::sync::Arc::new(bytes.into_inner()));
+    }
+
+    let mut texture = ImageTexture::new();
+    assert_eq!(texture.version(), 0);
+    let mut versions = Vec::new();
+    for (i, bytes) in png.iter().enumerate() {
+        texture.load_bytes(&gpu, &format!("image-{i}"), std::sync::Arc::clone(bytes));
+        for _ in 0..200 {
+            texture.update(&gpu);
+            if texture.version() as usize > i {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        versions.push((texture.version(), texture.generation()));
+    }
+
+    assert_eq!(versions[0].0, 1);
+    assert_eq!(
+        versions[1].0, 2,
+        "a second image of the same size still counts as new pixels"
+    );
+    assert_eq!(
+        versions[0].1, versions[1].1,
+        "and reuses the texture, so the generation stays put"
+    );
+}

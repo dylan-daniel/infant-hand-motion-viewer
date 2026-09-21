@@ -26,6 +26,7 @@ pub struct ImageTexture {
     texture: Option<wgpu::Texture>,
     view: Option<wgpu::TextureView>,
     generation: u64,
+    version: u64,
     width: u32,
     height: u32,
     shared: Arc<Mutex<ImageShared>>,
@@ -39,6 +40,7 @@ impl ImageTexture {
             texture: None,
             view: None,
             generation: 0,
+            version: 0,
             width: 0,
             height: 0,
             shared: Arc::new(Mutex::new(ImageShared {
@@ -201,6 +203,7 @@ impl ImageTexture {
         self.width = ready.width;
         self.height = ready.height;
         self.path = ready.path;
+        self.version += 1;
     }
 
     pub fn clear(&mut self) {
@@ -234,6 +237,12 @@ impl ImageTexture {
     /// Increments whenever the underlying texture is replaced, so the UI registration can be refreshed.
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// Increments every time new pixels are uploaded, including into the same texture, so anything derived from the
+    /// image's contents knows when to redraw.
+    pub fn version(&self) -> u64 {
+        self.version
     }
 
     pub fn width(&self) -> u32 {
