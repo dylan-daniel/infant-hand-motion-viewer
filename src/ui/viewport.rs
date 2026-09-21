@@ -107,7 +107,7 @@ fn draw_controls_overlay(
     mut show_panel: bool,
 ) -> (bool, f32) {
     let label = "Controls";
-    let button_width = ui.calc_text_size(label)[0] + 16.0;
+    let button_width = ui.calc_text_size(label)[0] + ui.clone_style().frame_padding()[0] * 2.0;
     ui.set_cursor_screen_pos([top_left[0] + width as f32 - button_width - 8.0, top_left[1] + 8.0]);
     if ui.button(label) {
         show_panel = !show_panel;
