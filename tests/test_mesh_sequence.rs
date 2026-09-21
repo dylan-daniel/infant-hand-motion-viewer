@@ -54,3 +54,29 @@ fn test_mesh_sequence_from_bytes_rejects_garbage() {
     assert!(MeshSequence::from_bytes("garbage", b"not a hexport").is_err());
     assert!(MeshSequence::from_bytes("empty", &[]).is_err());
 }
+
+#[test]
+fn test_frame_images_created_after_open_are_found() {
+    use infant_hand_motion_viewer::data::mesh_sequence::resolve_frames_dir;
+
+    let export = TempSyntheticExport::new("SYNTH_SUBJ", "SYNTH_TRIAL");
+    let seq = MeshSequence::open(&export.path).unwrap();
+    assert_eq!(seq.frame_image_path(0), None);
+
+    let frames_dir = resolve_frames_dir(&export.path);
+    std::fs::create_dir_all(&frames_dir).unwrap();
+    let image = frames_dir.join("frame_00001.jpg");
+    std::fs::write(&image, b"jpeg").unwrap();
+
+    assert_eq!(seq.frame_image_path(0), Some(image));
+    assert_eq!(seq.frames_dir(), Some(frames_dir.clone()));
+    let _ = std::fs::remove_dir_all(frames_dir);
+}
+
+#[test]
+fn test_sequence_from_bytes_has_no_frames_dir() {
+    let export = TempSyntheticExport::new("SYNTH_SUBJ", "SYNTH_TRIAL");
+    let raw = std::fs::read(&export.path).unwrap();
+    let seq = MeshSequence::from_bytes("host:/remote.hexport", &raw).unwrap();
+    assert_eq!(seq.frames_dir(), None);
+}

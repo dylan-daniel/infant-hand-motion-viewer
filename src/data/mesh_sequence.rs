@@ -50,7 +50,8 @@ pub fn resolve_frames_dir<P: AsRef<Path>>(export_file: P) -> PathBuf {
 #[derive(Debug, Clone)]
 pub struct MeshSequence {
     path: String,
-    frames_dir: PathBuf,
+    /// The local `.hexport` this was read from; `None` for sequences built from bytes, which have no local frame images.
+    export_path: Option<PathBuf>,
     frames: Vec<Frame>,
     frame_numbers: Vec<i32>,
     frame_flags_all: Vec<[bool; FLAG_LAYER_COUNT]>,
@@ -62,20 +63,19 @@ impl MeshSequence {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, HandExportError> {
         let path_buf = path.as_ref().to_path_buf();
         let path_str = path_buf.to_string_lossy().to_string();
-        let frames_dir = resolve_frames_dir(&path_buf);
 
         let rows = load_hand_export(&path_buf)?;
-        Ok(Self::from_rows(path_str, frames_dir, rows))
+        Ok(Self::from_rows(path_str, Some(path_buf), rows))
     }
 
     /// Builds a sequence from the bytes of a `.hexport` file held in memory. `label` identifies the source
     /// (for example the remote path) and no local frame images are looked up.
     pub fn from_bytes(label: &str, raw: &[u8]) -> Result<Self, HandExportError> {
         let rows = parse_hand_export(raw, label)?;
-        Ok(Self::from_rows(label.to_string(), PathBuf::new(), rows))
+        Ok(Self::from_rows(label.to_string(), None, rows))
     }
 
-    fn from_rows(path_str: String, frames_dir: PathBuf, rows: Vec<HandExportRow>) -> Self {
+    fn from_rows(path_str: String, export_path: Option<PathBuf>, rows: Vec<HandExportRow>) -> Self {
         let mut by_frame: BTreeMap<i32, Frame> = BTreeMap::new();
         let mut flags_all_by_frame: BTreeMap<i32, [bool; FLAG_LAYER_COUNT]> = BTreeMap::new();
         let mut flags_infant_by_frame: BTreeMap<i32, [bool; FLAG_LAYER_COUNT]> = BTreeMap::new();
@@ -133,7 +133,7 @@ impl MeshSequence {
 
         Self {
             path: path_str,
-            frames_dir,
+            export_path,
             frames,
             frame_numbers,
             frame_flags_all,
@@ -149,8 +149,10 @@ impl MeshSequence {
         &self.path
     }
 
-    pub fn frames_dir(&self) -> &Path {
-        &self.frames_dir
+    /// The directory holding this sequence's video frame images, looked up afresh so frames that appear
+    /// after the sequence was opened are still found. `None` for sequences without a local export file.
+    pub fn frames_dir(&self) -> Option<PathBuf> {
+        self.export_path.as_deref().map(resolve_frames_dir)
     }
 
     pub fn frame_numbers(&self) -> &[i32] {
@@ -184,10 +186,7 @@ impl MeshSequence {
     /// Resolves the filesystem path to the plain video frame image for a sequence playback index.
     pub fn frame_image_path(&self, index: usize) -> Option<PathBuf> {
         let frame_num = self.frame_number(index)?;
-        let frames_path = &self.frames_dir;
-        if frames_path.as_os_str().is_empty() {
-            return None;
-        }
+        let frames_path = self.frames_dir()?;
 
         let formats = [
             format!("frame_{frame_num:05}.jpg"),
