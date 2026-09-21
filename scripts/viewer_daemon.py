@@ -233,6 +233,50 @@ def find_frames_dir(export_path_str: str):
     return None
 
 
+FRAME_FILE_RE = re.compile(r"^frame_(\d+)\.(jpg|jpeg|png)$", re.IGNORECASE)
+FRAME_EXT_PRIORITY = {"jpg": 0, "jpeg": 1, "png": 2}
+_frame_index_cache = {}
+
+
+def scan_frame_files(frames_dir: Path):
+    """Map frame number -> image path for every non-empty frame_<n>.<jpg|jpeg|png>, ignoring zero padding."""
+    found = {}
+    with os.scandir(frames_dir) as entries:
+        for entry in entries:
+            m = FRAME_FILE_RE.match(entry.name)
+            if not m or not entry.is_file():
+                continue
+            try:
+                if entry.stat().st_size == 0:
+                    continue
+            except OSError:
+                continue
+            number = int(m.group(1))
+            rank = FRAME_EXT_PRIORITY[m.group(2).lower()]
+            if number not in found or rank < found[number][0]:
+                found[number] = (rank, Path(entry.path))
+    return {number: path for number, (_, path) in found.items()}
+
+
+def frame_files(frames_dir: Path, force_rescan: bool = False):
+    """Frame index for a directory, rebuilt when the directory changes (or when forced)."""
+    key = str(frames_dir)
+    mtime = os.stat(frames_dir).st_mtime_ns
+    cached = _frame_index_cache.get(key)
+    if force_rescan or cached is None or cached[0] != mtime:
+        cached = (mtime, scan_frame_files(frames_dir))
+        _frame_index_cache[key] = cached
+    return cached[1]
+
+
+def find_frame_file(frames_dir: Path, frame_number: int):
+    """Path of one frame image, rescanning once if the cached index does not have it yet."""
+    files = frame_files(frames_dir)
+    if frame_number not in files:
+        files = frame_files(frames_dir, force_rescan=True)
+    return files.get(frame_number)
+
+
 def handle_scan_tree(req):
     root = req.get("root", "")
     tree = scan_tree(root)
@@ -266,28 +310,23 @@ def handle_get_frame(req, out):
         write_json_line(out, {"id": req["id"], "status": "not_found"})
         return
 
-    for ext in [".jpg", ".png", ".jpeg"]:
-        for fmt in [f"frame_{frame_number:05d}{ext}", f"frame_{frame_number:04d}{ext}", f"frame_{frame_number}{ext}", f"{frame_number:05d}{ext}", f"{frame_number:04d}{ext}"]:
-            candidate = frames_dir / fmt
-            if candidate.exists():
-                try:
-                    resolved = candidate.resolve()
-                    with open(resolved, "rb") as f:
-                        data = f.read()
-                    write_json_line(out, {
-                        "id": req["id"],
-                        "status": "ok",
-                        "size": len(data),
-                        "filename": candidate.name
-                    })
-                    out.write(data)
-                    out.flush()
-                    return
-                except Exception as e:
-                    write_json_line(out, {"id": req["id"], "status": "error", "message": str(e)})
-                    return
-
-    write_json_line(out, {"id": req["id"], "status": "not_found"})
+    try:
+        candidate = find_frame_file(frames_dir, int(frame_number))
+        if candidate is None:
+            write_json_line(out, {"id": req["id"], "status": "not_found"})
+            return
+        with open(candidate.resolve(), "rb") as f:
+            data = f.read()
+        write_json_line(out, {
+            "id": req["id"],
+            "status": "ok",
+            "size": len(data),
+            "filename": candidate.name
+        })
+        out.write(data)
+        out.flush()
+    except Exception as e:
+        write_json_line(out, {"id": req["id"], "status": "error", "message": str(e)})
 
 
 def handle_bundle_frames(req, out):
@@ -299,36 +338,14 @@ def handle_bundle_frames(req, out):
         return
 
     try:
-        # Find all frame images
-        frame_files = []
-        for p in frames_dir.iterdir():
-            if p.suffix.lower() in [".jpg", ".png", ".jpeg"]:
-                frame_files.append(p)
-
-        frame_files.sort(key=lambda p: natural_sort_key(p.name))
-
-        if not frame_files:
-            write_json_line(out, {"id": req["id"], "status": "ok", "size": 0, "frame_count": 0})
-            return
-
-        start_frame = req.get("start_frame")
+        files = frame_files(frames_dir)
+        start_frame = req.get("start_frame") or 0
         count = req.get("count", 0)
 
-        selected_files = frame_files
-        if start_frame is not None and start_frame > 0:
-            matched = []
-            for p in frame_files:
-                m = re.search(r"(\d+)", p.name)
-                if m and int(m.group(1)) >= start_frame:
-                    matched.append(p)
-            if matched:
-                selected_files = matched
-            else:
-                idx = max(0, start_frame - 1)
-                selected_files = frame_files[idx:]
-
+        selected = [(n, files[n]) for n in sorted(files) if n >= start_frame]
         if count and count > 0:
-            selected_files = selected_files[:count]
+            selected = selected[:count]
+        selected_files = [p for _, p in selected]
 
         # Pack into an uncompressed ZIP archive (JPEGs are already compressed)
         buf = io.BytesIO()

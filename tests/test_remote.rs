@@ -112,6 +112,41 @@ fn test_remote_client_local_daemon_e2e() {
     assert_eq!(downloaded_bytes, synthetic_bytes);
     assert!(client.fetch_file_bytes("/definitely/not/a/file.hexport").is_err());
 
+    // Frame files match by number whatever their zero padding; other names are ignored
+    fs::write(frames_dir.join("frame_2.jpg"), b"frame two").unwrap();
+    fs::write(frames_dir.join("frame_0003.png"), b"frame three").unwrap();
+    fs::write(frames_dir.join("00004.jpg"), b"bare number").unwrap();
+    fs::write(frames_dir.join("frame_5.jpg"), b"").unwrap();
+    assert_eq!(
+        client
+            .fetch_frame_bytes(&hexport_path.to_string_lossy(), 2)
+            .unwrap()
+            .unwrap(),
+        b"frame two"
+    );
+    assert_eq!(
+        client
+            .fetch_frame_bytes(&hexport_path.to_string_lossy(), 3)
+            .unwrap()
+            .unwrap(),
+        b"frame three"
+    );
+    assert_eq!(
+        client.fetch_frame_bytes(&hexport_path.to_string_lossy(), 4).unwrap(),
+        None
+    );
+    assert_eq!(
+        client.fetch_frame_bytes(&hexport_path.to_string_lossy(), 5).unwrap(),
+        None
+    );
+    let bundled: Vec<u32> = client
+        .fetch_frame_bundle_bytes(&hexport_path.to_string_lossy(), 2, 10)
+        .unwrap()
+        .into_iter()
+        .map(|(n, _)| n)
+        .collect();
+    assert_eq!(bundled, vec![2, 3]);
+
     // Test in-memory frame fetches
     let export_str = hexport_path.to_string_lossy().into_owned();
     assert_eq!(
@@ -120,7 +155,7 @@ fn test_remote_client_local_daemon_e2e() {
     );
     assert_eq!(client.fetch_frame_bytes(&export_str, 99).unwrap(), None);
     assert_eq!(
-        client.fetch_frame_bundle_bytes(&export_str, 1, 4).unwrap(),
+        client.fetch_frame_bundle_bytes(&export_str, 1, 1).unwrap(),
         vec![(1u32, frame_bytes.to_vec())]
     );
 
