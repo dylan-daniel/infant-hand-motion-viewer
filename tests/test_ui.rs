@@ -100,6 +100,19 @@ fn test_file_explorer_local_scan() {
 }
 
 #[test]
+fn test_explorer_open_state_roundtrip() {
+    let mut explorer = FileExplorer::new();
+    explorer.set_saved_open(vec![
+        "/data/b".to_string(),
+        "/data/a".to_string(),
+        "host/subject".to_string(),
+    ]);
+    explorer.set_saved_collapsed(vec!["/data/c".to_string()]);
+    assert_eq!(explorer.expanded_paths(), vec!["/data/a", "/data/b", "host/subject"]);
+    assert_eq!(explorer.collapsed_paths(), vec!["/data/c"]);
+}
+
+#[test]
 fn test_menu_state_and_result() {
     let state = MenuState::default();
     assert!(!state.remote_connected);

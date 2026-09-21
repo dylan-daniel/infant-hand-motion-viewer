@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -90,8 +90,7 @@ pub struct FileExplorer {
     remote_client: Option<RemoteClient>,
     scan_error: String,
 
-    saved_open: HashSet<String>,
-    live_open: HashSet<String>,
+    open_state: HashMap<String, bool>,
 
     in_flight: Arc<AtomicUsize>,
     latest_scan: Arc<AtomicU64>,
@@ -109,8 +108,7 @@ impl FileExplorer {
             remote_client: None,
             scan_error: String::new(),
 
-            saved_open: HashSet::new(),
-            live_open: HashSet::new(),
+            open_state: HashMap::new(),
 
             in_flight: Arc::new(AtomicUsize::new(0)),
             latest_scan: Arc::new(AtomicU64::new(0)),
@@ -165,12 +163,37 @@ impl FileExplorer {
         &self.scan_error
     }
 
+    /// Restore folders the user left expanded last session.
     pub fn set_saved_open(&mut self, paths: Vec<String>) {
-        self.saved_open = paths.into_iter().collect();
+        for path in paths {
+            self.open_state.insert(path, true);
+        }
+    }
+
+    /// Restore folders the user left collapsed last session, overriding the default-open depth.
+    pub fn set_saved_collapsed(&mut self, paths: Vec<String>) {
+        for path in paths {
+            self.open_state.insert(path, false);
+        }
     }
 
     pub fn expanded_paths(&self) -> Vec<String> {
-        self.live_open.iter().cloned().collect()
+        self.paths_with_state(true)
+    }
+
+    pub fn collapsed_paths(&self) -> Vec<String> {
+        self.paths_with_state(false)
+    }
+
+    fn paths_with_state(&self, open: bool) -> Vec<String> {
+        let mut paths: Vec<String> = self
+            .open_state
+            .iter()
+            .filter(|&(_, &is_open)| is_open == open)
+            .map(|(path, _)| path.clone())
+            .collect();
+        paths.sort();
+        paths
     }
 
     /// Rescan the current source. A newer refresh supersedes any scan still running, so its result is dropped.
@@ -402,19 +425,17 @@ impl FileExplorer {
             ui.child_window("##tree_scroll")
                 .flags(WindowFlags::HORIZONTAL_SCROLLBAR)
                 .build(ui, || {
-                    self.live_open.clear();
                     if let Some(node) = self.root_node.clone() {
                         let mut draw = TreeDraw {
                             icons,
                             is_remote,
                             result: &mut result,
-                            live_open: &mut self.live_open,
-                            saved_open: &self.saved_open,
+                            open_state: &mut self.open_state,
                             row_left: ui.cursor_screen_pos()[0],
                             row_width: ui.content_region_avail()[0],
                             row_index: 0,
                         };
-                        Self::draw_node(ui, &node, &mut draw);
+                        Self::draw_node(ui, &node, &mut draw, 0);
                     } else if scanning {
                         ui.text_disabled(if is_remote {
                             "Scanning remote server..."
@@ -534,7 +555,7 @@ impl FileExplorer {
         draw.row_index += 1;
     }
 
-    fn draw_node(ui: &Ui, node: &ExplorerNode, draw: &mut TreeDraw) {
+    fn draw_node(ui: &Ui, node: &ExplorerNode, draw: &mut TreeDraw, depth: usize) {
         Self::stripe_row(ui, draw);
         let node_left = ui.cursor_screen_pos()[0];
 
@@ -555,7 +576,11 @@ impl FileExplorer {
                 draw.result.is_remote = draw.is_remote;
             }
         } else {
-            let should_open = node.default_open || draw.saved_open.contains(&node.path);
+            let should_open = draw
+                .open_state
+                .get(&node.path)
+                .copied()
+                .unwrap_or(depth <= DEFAULT_OPEN_DEPTH);
 
             let node_token = ui
                 .tree_node_config(&node.path)
@@ -566,6 +591,7 @@ impl FileExplorer {
                 .span_full_width(true)
                 .push();
             let open = node_token.is_some();
+            draw.open_state.insert(node.path.clone(), open);
             let icon = if open {
                 draw.icons.folder_open
             } else {
@@ -574,9 +600,8 @@ impl FileExplorer {
             Self::draw_node_label(ui, icon, &node.name, node_left);
 
             if open {
-                draw.live_open.insert(node.path.clone());
                 for child in &node.children {
-                    Self::draw_node(ui, child, draw);
+                    Self::draw_node(ui, child, draw, depth + 1);
                 }
             }
         }
@@ -611,13 +636,15 @@ impl FileExplorer {
     }
 }
 
+/// Folders at or above this depth (the root is 0) start expanded unless the user's saved state says otherwise.
+const DEFAULT_OPEN_DEPTH: usize = 1;
+
 /// State shared by every node in one frame's tree walk.
 struct TreeDraw<'a> {
     icons: &'a UiIcons,
     is_remote: bool,
     result: &'a mut ExplorerResult,
-    live_open: &'a mut HashSet<String>,
-    saved_open: &'a HashSet<String>,
+    open_state: &'a mut HashMap<String, bool>,
     row_left: f32,
     row_width: f32,
     row_index: usize,

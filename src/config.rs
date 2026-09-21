@@ -73,6 +73,8 @@ pub struct Config {
     pub data_folder: Option<String>,
     #[serde(default)]
     pub expanded_folders: Vec<String>,
+    #[serde(default)]
+    pub collapsed_folders: Vec<String>,
 
     #[serde(default)]
     pub remote_mode: bool,
@@ -126,6 +128,7 @@ impl Default for Config {
             flag_layers_enabled: default_flag_layers(),
             data_folder: None,
             expanded_folders: Vec::new(),
+            collapsed_folders: Vec::new(),
             remote_mode: false,
             remote_host: String::new(),
             remote_port: default_remote_port(),
