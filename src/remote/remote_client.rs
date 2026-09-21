@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{
     Arc, Mutex, RwLock,
@@ -464,8 +464,8 @@ impl RemoteClient {
         Ok(node)
     }
 
-    /// Fetch a remote file (such as a `.hexport` file) and save directly to `local_dest_path`.
-    pub fn fetch_file(&self, remote_path: &str, local_dest_path: &Path) -> Result<(), String> {
+    /// Fetch a remote file (such as a `.hexport` file) into memory.
+    pub fn fetch_file_bytes(&self, remote_path: &str) -> Result<Vec<u8>, String> {
         let (hdr, data) = {
             let mut lock = self.session.lock().unwrap();
             let session = lock.as_mut().ok_or_else(|| "Not connected".to_string())?;
@@ -488,13 +488,7 @@ impl RemoteClient {
                 .unwrap_or("Failed to fetch remote file");
             return Err(msg.to_string());
         }
-
-        if let Some(parent) = local_dest_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| format!("Failed to create local directory: {e}"))?;
-        }
-
-        fs::write(local_dest_path, &data).map_err(|e| format!("Failed writing to local file: {e}"))?;
-        Ok(())
+        Ok(data)
     }
 
     /// Fetch one frame image into memory. `Ok(None)` means the remote has no such frame.

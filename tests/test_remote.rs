@@ -169,14 +169,12 @@ fn test_remote_client_local_daemon_e2e() {
     assert!(!tree.children.is_empty());
     assert_eq!(tree.children[0].name, "subject_a");
 
-    // Test fetch_file
-    let local_dest_hexport = temp_workspace.path().join("downloaded.hexport");
-    client
-        .fetch_file(&hexport_path.to_string_lossy(), &local_dest_hexport)
-        .expect("fetch_file failed");
-    assert!(local_dest_hexport.exists());
-    let downloaded_bytes = fs::read(&local_dest_hexport).unwrap();
+    // Test fetch_file_bytes
+    let downloaded_bytes = client
+        .fetch_file_bytes(&hexport_path.to_string_lossy())
+        .expect("fetch_file_bytes failed");
     assert_eq!(downloaded_bytes, synthetic_bytes);
+    assert!(client.fetch_file_bytes("/definitely/not/a/file.hexport").is_err());
 
     // Test in-memory frame fetches
     let export_str = hexport_path.to_string_lossy().into_owned();

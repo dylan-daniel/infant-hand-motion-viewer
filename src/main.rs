@@ -35,9 +35,15 @@ const PLAYBACK_FPS: f64 = 30.0;
 const SCRUB_INITIAL_DELAY: f64 = 0.25;
 const SCRUB_REPEAT_INTERVAL: f64 = 0.03;
 
+/// Where a sequence to open comes from: a local file, or the bytes of a remote file held in memory.
+enum OpenSource {
+    Local(String),
+    Remote { path: String, bytes: Vec<u8> },
+}
+
 struct PendingOpen {
-    local_path: String,
-    remote_path: String,
+    source: OpenSource,
+    start_frame: usize,
 }
 
 struct DialogChannels {
@@ -132,22 +138,30 @@ struct AppState {
 }
 
 impl AppState {
-    fn open_sequence(&mut self, export_path: &str, start_frame: usize) {
+    fn open_sequence(&mut self, source: &OpenSource, start_frame: usize) {
         self.frame_image.clear();
-        match MeshSequence::open(export_path) {
+        let (label, opened) = match source {
+            OpenSource::Local(path) => (path.as_str(), MeshSequence::open(path)),
+            OpenSource::Remote { path, bytes } => (path.as_str(), MeshSequence::from_bytes(path, bytes)),
+        };
+        self.current_remote_path = match source {
+            OpenSource::Local(_) => String::new(),
+            OpenSource::Remote { path, .. } => path.clone(),
+        };
+        match opened {
             Ok(seq) => {
                 let frame_count = seq.frame_count();
                 if frame_count > 0 {
                     self.current_frame = start_frame.min(frame_count - 1);
                     self.sequence = Some(seq);
                 } else {
-                    eprintln!("No frames found in {export_path}");
+                    eprintln!("No frames found in {label}");
                     self.sequence = None;
                     self.current_frame = 0;
                 }
             }
             Err(err) => {
-                eprintln!("Failed to open {export_path}: {err}");
+                eprintln!("Failed to open {label}: {err}");
                 self.sequence = None;
                 self.current_frame = 0;
             }
@@ -156,6 +170,28 @@ impl AppState {
         self.loaded_frame = None;
         self.transform = None;
         self.depth_reference = None;
+    }
+
+    /// Download a remote `.hexport` into memory on a worker and queue it to open once it arrives.
+    fn request_remote_open(&mut self, remote_path: String, start_frame: usize) {
+        let client = self.remote_client.clone();
+        let seq_generation = self.active_sequence_id.fetch_add(1, Ordering::SeqCst) + 1;
+        let active_id = Arc::clone(&self.active_sequence_id);
+        let ready = Arc::clone(&self.pending_remote_open);
+        self.remote_open_worker
+            .submit(move || match client.fetch_file_bytes(&remote_path) {
+                Ok(bytes) if active_id.load(Ordering::SeqCst) == seq_generation => {
+                    *ready.lock().unwrap() = Some(PendingOpen {
+                        source: OpenSource::Remote {
+                            path: remote_path,
+                            bytes,
+                        },
+                        start_frame,
+                    });
+                }
+                Ok(_) => {}
+                Err(err) => eprintln!("Failed to fetch {remote_path}: {err}"),
+            });
     }
 
     /// Hide and pin the cursor while dragging the camera, restoring it where it was afterwards.
@@ -439,7 +475,7 @@ impl ApplicationHandler for AppRunner {
             && Path::new(&last_folder).is_file()
         {
             let start_frame = app_state.settings.last_frame;
-            app_state.open_sequence(&last_folder, start_frame);
+            app_state.open_sequence(&OpenSource::Local(last_folder), start_frame);
         }
 
         self.state = Some(app_state);
@@ -658,8 +694,8 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
     {
         if let Some(path) = result {
             state.pending_open_file = Some(PendingOpen {
-                local_path: path.to_string_lossy().into_owned(),
-                remote_path: String::new(),
+                source: OpenSource::Local(path.to_string_lossy().into_owned()),
+                start_frame: 0,
             });
         }
         state.dialogs.open_file_rx = None;
@@ -720,8 +756,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
 
     // Apply deferred open
     if let Some(pending) = state.pending_open_file.take() {
-        state.current_remote_path = pending.remote_path;
-        state.open_sequence(&pending.local_path, 0);
+        state.open_sequence(&pending.source, pending.start_frame);
 
         state.active_sequence_id.fetch_add(1, Ordering::SeqCst);
         state.remote_fetch_worker.clear();
@@ -1077,39 +1112,11 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
 
     if let Some(open_path) = explorer_result.open_file {
         if explorer_result.is_remote {
-            let remote_path = open_path;
-            let host = if !state.remote_client.config().host.is_empty() {
-                state.remote_client.config().host
-            } else {
-                state.settings.remote_host.clone()
-            };
-            let local_export = CacheManager::get_local_export_path(&host, Path::new(&remote_path));
-
-            if CacheManager::is_export_cached(&local_export) {
-                state.pending_open_file = Some(PendingOpen {
-                    local_path: local_export.to_string_lossy().into_owned(),
-                    remote_path,
-                });
-            } else {
-                let client = state.remote_client.clone();
-                let seq_generation = state.active_sequence_id.fetch_add(1, Ordering::SeqCst) + 1;
-                let active_id = Arc::clone(&state.active_sequence_id);
-                let ready = Arc::clone(&state.pending_remote_open);
-                state.remote_open_worker.submit(move || {
-                    if client.fetch_file(&remote_path, &local_export).is_ok()
-                        && active_id.load(Ordering::SeqCst) == seq_generation
-                    {
-                        *ready.lock().unwrap() = Some(PendingOpen {
-                            local_path: local_export.to_string_lossy().into_owned(),
-                            remote_path,
-                        });
-                    }
-                });
-            }
+            state.request_remote_open(open_path, 0);
         } else {
             state.pending_open_file = Some(PendingOpen {
-                local_path: open_path,
-                remote_path: String::new(),
+                source: OpenSource::Local(open_path),
+                start_frame: 0,
             });
         }
     }
