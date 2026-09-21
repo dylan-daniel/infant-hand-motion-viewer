@@ -604,6 +604,8 @@ impl ApplicationHandler for AppRunner {
                 }
             }
             WindowEvent::Focused(false) => {
+                state.keys_down.clear();
+                state.shift_down = false;
                 state.orbiting = false;
                 state.panning = false;
                 state.set_relative_mouse(false);
