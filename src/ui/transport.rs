@@ -355,10 +355,8 @@ pub fn draw_transport_bar(
         state.playing = !state.playing;
     }
 
-    // Scrubber slider and frame label
+    // Scrubber slider
     ui.same_line();
-    let label = format!("frame {} / {}", state.current_frame + 1, transport.frame_count);
-    let label_width = ui.calc_text_size(&label)[0];
     let spacing = ui.clone_style().item_spacing()[0];
     // Sized for the widest label so the button, and with it the slider, keeps its width as the speed changes
     let speed_label = format!("{:.1}x", state.speed);
@@ -367,8 +365,7 @@ pub fn draw_transport_bar(
         .map(|&speed| ui.calc_text_size(format!("{speed:.1}x"))[0])
         .fold(ui.calc_text_size(&speed_label)[0], f32::max);
     let speed_button_width = speed_text_width + ui.clone_style().frame_padding()[0] * 2.0;
-    let slider_width =
-        (width - 8.0 - button_width - spacing - label_width - spacing - speed_button_width - spacing - 8.0).max(1.0);
+    let slider_width = (width - 8.0 - button_width - spacing - speed_button_width - spacing - 8.0).max(1.0);
     ui.set_next_item_width(slider_width);
     let scrubbing = draw_frame_slider(
         ui,
@@ -378,9 +375,6 @@ pub fn draw_transport_bar(
         transport,
     );
     state.scrubbing = scrubbing;
-
-    ui.same_line();
-    ui.text(&label);
 
     // Speed button: cycles through the preset speeds
     ui.same_line();
