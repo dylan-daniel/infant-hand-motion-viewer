@@ -1,5 +1,6 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use crate::data::geometry::HandData;
 use crate::data::hand_export::{HandExportError, HandExportRow, load_hand_export, parse_hand_export};
@@ -52,6 +53,7 @@ pub struct MeshSequence {
     path: String,
     /// The local `.hexport` this was read from; `None` for sequences built from bytes, which have no local frame images.
     export_path: Option<PathBuf>,
+    frame_index: Arc<Mutex<Option<FrameIndex>>>,
     frames: Vec<Frame>,
     frame_numbers: Vec<i32>,
     frame_flags_all: Vec<[bool; FLAG_LAYER_COUNT]>,
@@ -134,6 +136,7 @@ impl MeshSequence {
         Self {
             path: path_str,
             export_path,
+            frame_index: Arc::new(Mutex::new(None)),
             frames,
             frame_numbers,
             frame_flags_all,
@@ -183,37 +186,64 @@ impl MeshSequence {
         list.get(index).is_some_and(|flags| flags[flag_index])
     }
 
-    /// Resolves the filesystem path to the plain video frame image for a sequence playback index.
+    /// Resolves the filesystem path to the video frame image (`frame_<n>.jpg|jpeg|png`, any zero padding)
+    /// for a sequence playback index. The frames directory is indexed once and rescanned only on a miss,
+    /// so images that appear later are still found.
     pub fn frame_image_path(&self, index: usize) -> Option<PathBuf> {
         let frame_num = self.frame_number(index)?;
         let frames_path = self.frames_dir()?;
 
-        let formats = [
-            format!("frame_{frame_num:05}.jpg"),
-            format!("frame_{frame_num:05}.jpeg"),
-            format!("frame_{frame_num:05}.png"),
-            format!("frame_{frame_num:04}.jpg"),
-            format!("frame_{frame_num:04}.jpeg"),
-            format!("frame_{frame_num:04}.png"),
-            format!("frame_{frame_num}.jpg"),
-            format!("frame_{frame_num}.jpeg"),
-            format!("frame_{frame_num}.png"),
-            format!("{frame_num:05}.jpg"),
-            format!("{frame_num:05}.jpeg"),
-            format!("{frame_num:05}.png"),
-            format!("{frame_num:04}.jpg"),
-            format!("{frame_num:04}.jpeg"),
-            format!("{frame_num:04}.png"),
-        ];
-
-        for name in &formats {
-            let candidate = frames_path.join(name);
-            if candidate.is_file() && candidate.metadata().is_ok_and(|m| m.len() > 0) {
-                return Some(candidate);
+        let mut cache = self.frame_index.lock().ok()?;
+        for attempt in 0..2 {
+            if attempt == 1 || cache.as_ref().is_none_or(|c| c.dir != frames_path) {
+                *cache = Some(FrameIndex::scan(&frames_path));
+            }
+            if let Some(found) = cache.as_ref().and_then(|c| c.files.get(&frame_num))
+                && found.metadata().is_ok_and(|m| m.is_file() && m.len() > 0)
+            {
+                return Some(found.clone());
             }
         }
         None
     }
+}
+
+/// Frame image files found in one directory, keyed by frame number.
+#[derive(Debug)]
+struct FrameIndex {
+    dir: PathBuf,
+    files: HashMap<i32, PathBuf>,
+}
+
+impl FrameIndex {
+    fn scan(dir: &Path) -> Self {
+        let mut files = HashMap::new();
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if let Some(number) = frame_number_of_image(&path) {
+                    files.entry(number).or_insert(path);
+                }
+            }
+        }
+        Self {
+            dir: dir.to_path_buf(),
+            files,
+        }
+    }
+}
+
+/// The frame number of a `frame_<digits>.<jpg|jpeg|png>` file name, ignoring zero padding.
+fn frame_number_of_image(path: &Path) -> Option<i32> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    if !matches!(ext.as_str(), "jpg" | "jpeg" | "png") {
+        return None;
+    }
+    let digits = path.file_stem()?.to_str()?.strip_prefix("frame_")?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
 }
 
 /// Computes the mean camera-space depth (Z) across all hands in a frame.
