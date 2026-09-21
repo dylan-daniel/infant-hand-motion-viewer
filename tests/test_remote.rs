@@ -8,7 +8,9 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use infant_hand_motion_viewer::remote::{CacheManager, ConnectionState, RemoteClient, RemoteConfig, ScrubWorker};
+use infant_hand_motion_viewer::remote::{
+    CacheManager, ConnectionState, FrameStream, RemoteClient, RemoteConfig, ScrubWorker,
+};
 use infant_hand_motion_viewer::util::WorkerQueue;
 
 struct TempDirGuard(PathBuf);
@@ -205,6 +207,22 @@ fn test_remote_client_local_daemon_e2e() {
         .expect("fetch_and_extract_bundle failed");
     assert_eq!(count, 1);
     assert!(bundle_extract_dir.join("frame_00001.jpg").exists());
+
+    // Test frame stream
+    let stream = FrameStream::new(client.clone());
+    stream.set_focus(&export_str, 1);
+    let mut fetched = None;
+    for _ in 0..100 {
+        fetched = stream.get(1);
+        if fetched.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert_eq!(
+        fetched.expect("frame stream never delivered frame 1").as_slice(),
+        frame_bytes
+    );
 
     // Test scrub worker
     let mut scrub_worker = ScrubWorker::new(client.clone());
