@@ -186,6 +186,18 @@ fn test_remote_client_local_daemon_e2e() {
     assert!(local_dest_frame.exists());
     assert_eq!(fs::read(&local_dest_frame).unwrap(), frame_bytes);
 
+    // Test in-memory frame fetches
+    let export_str = hexport_path.to_string_lossy().into_owned();
+    assert_eq!(
+        client.fetch_frame_bytes(&export_str, 1).unwrap().as_deref(),
+        Some(&frame_bytes[..])
+    );
+    assert_eq!(client.fetch_frame_bytes(&export_str, 99).unwrap(), None);
+    assert_eq!(
+        client.fetch_frame_bundle_bytes(&export_str, 1, 4).unwrap(),
+        vec![(1u32, frame_bytes.to_vec())]
+    );
+
     // Test fetch_and_extract_bundle
     let bundle_extract_dir = temp_workspace.path().join("extracted_bundle");
     let count = client

@@ -494,6 +494,87 @@ impl RemoteClient {
         Ok(())
     }
 
+    /// Fetch one frame image into memory. `Ok(None)` means the remote has no such frame.
+    pub fn fetch_frame_bytes(&self, remote_export_path: &str, frame_number: u32) -> Result<Option<Vec<u8>>, String> {
+        let (hdr, data) = {
+            let mut lock = self.session.lock().unwrap();
+            let session = lock.as_mut().ok_or_else(|| "Not connected".to_string())?;
+            let req_id = session.next_id;
+            session.next_id += 1;
+
+            let req = serde_json::json!({
+                "id": req_id,
+                "cmd": "get_frame",
+                "path": remote_export_path,
+                "frame": frame_number,
+            });
+            Self::send_command_binary(session, &req)?
+        };
+
+        match hdr.get("status").and_then(|s| s.as_str()) {
+            Some("ok") => Ok(Some(data)),
+            Some("not_found") => Ok(None),
+            _ => Err(hdr
+                .get("message")
+                .and_then(|s| s.as_str())
+                .unwrap_or("Failed to fetch remote frame")
+                .to_string()),
+        }
+    }
+
+    /// Fetch up to `count` consecutive frame images starting at `start_frame` in one round trip, keyed by frame number.
+    pub fn fetch_frame_bundle_bytes(
+        &self,
+        remote_export_path: &str,
+        start_frame: u32,
+        count: u32,
+    ) -> Result<Vec<(u32, Vec<u8>)>, String> {
+        let (hdr, zip_data) = {
+            let mut lock = self.session.lock().unwrap();
+            let session = lock.as_mut().ok_or_else(|| "Not connected".to_string())?;
+            let req_id = session.next_id;
+            session.next_id += 1;
+
+            let req = serde_json::json!({
+                "id": req_id,
+                "cmd": "bundle_frames",
+                "path": remote_export_path,
+                "start_frame": start_frame.max(1),
+                "count": count,
+            });
+            Self::send_command_binary(session, &req)?
+        };
+
+        if hdr.get("status").and_then(|s| s.as_str()) != Some("ok") {
+            return Err(hdr
+                .get("message")
+                .and_then(|s| s.as_str())
+                .unwrap_or("Bundle generation failed on remote server")
+                .to_string());
+        }
+        if zip_data.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip_data))
+            .map_err(|e| format!("Failed to read zip archive: {e}"))?;
+        let mut frames = Vec::with_capacity(archive.len());
+        for i in 0..archive.len() {
+            let mut file = archive.by_index(i).map_err(|e| format!("Zip entry error: {e}"))?;
+            if file.is_dir() {
+                continue;
+            }
+            let Some(number) = frame_number_from_name(file.name()) else {
+                continue;
+            };
+            let mut data = Vec::with_capacity(file.size() as usize);
+            file.read_to_end(&mut data)
+                .map_err(|e| format!("Failed to extract zip file: {e}"))?;
+            frames.push((number, data));
+        }
+        Ok(frames)
+    }
+
     /// Fetch a single frame image and save to `local_file_dest`.
     pub fn fetch_single_frame(
         &self,
@@ -721,4 +802,12 @@ impl Drop for RemoteClient {
             self.disconnect();
         }
     }
+}
+
+/// First run of digits in a frame file name (`frame_00042.jpg` -> 42).
+pub fn frame_number_from_name(name: &str) -> Option<u32> {
+    let file = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    let start = file.find(|c: char| c.is_ascii_digit())?;
+    let digits: String = file[start..].chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
 }
