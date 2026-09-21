@@ -29,6 +29,7 @@ use infant_hand_motion_viewer::ui::{
     draw_remote_modal, draw_storage_modal, draw_viewport_window,
 };
 use infant_hand_motion_viewer::util::WorkerQueue;
+use infant_hand_motion_viewer::util::window_placement::{MonitorRect, is_position_reachable};
 
 const PLAYBACK_FPS: f64 = 30.0;
 const SCRUB_INITIAL_DELAY: f64 = 0.25;
@@ -226,7 +227,14 @@ impl ApplicationHandler for AppRunner {
             ))
             .with_resizable(true);
         if let (Some(x), Some(y)) = (self.settings.window_x, self.settings.window_y) {
-            window_attributes = window_attributes.with_position(PhysicalPosition::new(x, y));
+            let monitors: Vec<MonitorRect> = event_loop
+                .available_monitors()
+                .map(|m| (m.position().x, m.position().y, m.size().width, m.size().height))
+                .collect();
+            // A monitor that was unplugged since last run would leave the window unreachable, so let the OS place it.
+            if monitors.is_empty() || is_position_reachable((x, y), &monitors) {
+                window_attributes = window_attributes.with_position(PhysicalPosition::new(x, y));
+            }
         }
         if self.settings.window_fullscreen {
             window_attributes = window_attributes.with_fullscreen(Some(Fullscreen::Borderless(None)));
