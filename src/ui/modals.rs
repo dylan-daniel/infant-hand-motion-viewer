@@ -55,7 +55,23 @@ fn draw_modal(ui: &Ui, name: &str, width: f32, is_open: &mut bool, body: impl Fn
 }
 
 /// Draw the centered modal dialog for SSH / remote daemon configuration.
-pub fn draw_remote_modal(ui: &Ui, is_open: &mut bool, config: &mut RemoteConfig, client: &RemoteClient) {
+/// The modal stays open while connecting so failures are visible, and closes itself once the connection succeeds.
+/// `connect_in_flight` remembers that this modal started a connection; closing the modal cancels one still in progress.
+pub fn draw_remote_modal(
+    ui: &Ui,
+    is_open: &mut bool,
+    config: &mut RemoteConfig,
+    client: &RemoteClient,
+    connect_in_flight: &mut bool,
+) {
+    if !*is_open {
+        if *connect_in_flight && client.is_connecting() {
+            client.disconnect();
+        }
+        *connect_in_flight = false;
+        return;
+    }
+
     draw_modal(ui, "Connect to Remote Server", REMOTE_MODAL_WIDTH, is_open, || {
         let mut close = false;
         ui.text("Remote SSH Daemon Connection");
@@ -97,11 +113,24 @@ pub fn draw_remote_modal(ui: &Ui, is_open: &mut bool, config: &mut RemoteConfig,
             ui.text_wrapped(&last_err);
         }
 
+        if *connect_in_flight && state == ConnectionState::Connected {
+            *connect_in_flight = false;
+            close = true;
+        } else if state == ConnectionState::Error {
+            *connect_in_flight = false;
+        }
+
         ui.separator();
 
-        if ui.button_with_size("Connect", [ui.content_region_avail()[0], 0.0]) {
+        let connecting = state == ConnectionState::Connecting;
+        let can_connect = !config.host.trim().is_empty() && !connecting;
+        let label = if connecting { "Connecting..." } else { "Connect" };
+        let clicked = ui.with_disabled_if(!can_connect, || {
+            ui.button_with_size(label, [ui.content_region_avail()[0], 0.0])
+        });
+        if clicked {
             client.connect_async(config.clone());
-            close = true;
+            *connect_in_flight = true;
         }
         close
     });

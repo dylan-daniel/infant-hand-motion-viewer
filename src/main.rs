@@ -116,6 +116,7 @@ struct AppState {
     restore_focus_frames: i32,
     explorer: FileExplorer,
     show_remote_modal: bool,
+    remote_connect_in_flight: bool,
     remote_config: RemoteConfig,
     remote_client: RemoteClient,
     remote_fetch_worker: Arc<WorkerQueue>,
@@ -451,6 +452,7 @@ impl ApplicationHandler for AppRunner {
             restore_focus_frames: 3,
             explorer,
             show_remote_modal: false,
+            remote_connect_in_flight: false,
             remote_config,
             remote_client,
             remote_fetch_worker,
@@ -1020,6 +1022,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             &mut state.show_remote_modal,
             &mut state.remote_config,
             &state.remote_client,
+            &mut state.remote_connect_in_flight,
         );
 
         if state.restore_focus_frames > 0 {
