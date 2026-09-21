@@ -282,7 +282,7 @@ fn draw_frame_slider(
                 }
             }
             if !active_layers.is_empty() {
-                ui.tooltip(|| {
+                crate::ui::padded_tooltip(ui, || {
                     ui.text(format!("Frame {} Flags:", hover_frame + 1));
                     for idx in active_layers {
                         let c = FLAG_LAYERS[idx].color;
