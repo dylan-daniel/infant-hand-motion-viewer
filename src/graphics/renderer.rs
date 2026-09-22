@@ -26,7 +26,8 @@ struct Uniforms {
     view: [f32; 16],
     proj: [f32; 16],
     alpha: f32,
-    _pad: [f32; 3],
+    highlight: f32,
+    _pad: [f32; 2],
 }
 
 /// Inputs describing what to draw in a scene render.
@@ -37,6 +38,7 @@ pub struct SceneRender<'a> {
     pub transform: Option<&'a Transform>,
     pub reference_depth: Option<f32>,
     pub show_camera_marker: bool,
+    pub hovered_hand: Option<usize>,
 }
 
 struct LineBuffer {
@@ -280,6 +282,7 @@ impl Renderer {
         self.sample_count = sample_count;
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn bind_draw(
         &self,
         gpu: &Gpu,
@@ -288,6 +291,7 @@ impl Renderer {
         view: &Mat4,
         proj: &Mat4,
         alpha: f32,
+        highlight: f32,
     ) {
         let slot = self.next_slot.get();
         debug_assert!(slot < MAX_DRAWS_PER_FRAME, "scene draw count exceeds uniform capacity");
@@ -299,7 +303,8 @@ impl Renderer {
             view: view.to_cols_array(),
             proj: proj.to_cols_array(),
             alpha,
-            _pad: [0.0; 3],
+            highlight,
+            _pad: [0.0; 2],
         };
         gpu.queue
             .write_buffer(&self.uniforms, offset, bytemuck::bytes_of(&data));
@@ -361,11 +366,11 @@ impl Renderer {
             });
 
             pass.set_pipeline(&self.flat_lines_depth);
-            self.bind_draw(gpu, &mut pass, &Mat4::IDENTITY, &view, &proj, 1.0);
+            self.bind_draw(gpu, &mut pass, &Mat4::IDENTITY, &view, &proj, 1.0, 0.0);
             self.draw_lines(&mut pass, &self.grid);
 
             pass.set_pipeline(&self.flat_lines_overlay);
-            self.bind_draw(gpu, &mut pass, &Mat4::IDENTITY, &view, &proj, 1.0);
+            self.bind_draw(gpu, &mut pass, &Mat4::IDENTITY, &view, &proj, 1.0, 0.0);
             self.draw_lines(&mut pass, &self.axes);
 
             if let Some(frame) = scene.frame {
@@ -375,7 +380,7 @@ impl Renderer {
             if scene.show_camera_marker && camera.draws_marker() {
                 pass.set_pipeline(&self.flat_tris_blend);
                 let model = Mat4::from_translation(camera.marker_target());
-                self.bind_draw(gpu, &mut pass, &model, &view, &proj, 1.0);
+                self.bind_draw(gpu, &mut pass, &model, &view, &proj, 1.0, 0.0);
                 self.draw_lines(&mut pass, &self.marker);
             }
         }
@@ -404,7 +409,8 @@ impl Renderer {
         pass.set_pipeline(&self.lit_opaque);
         if scene.translucent {
             for (i, hand) in frame.hands.iter().enumerate() {
-                self.bind_draw(gpu, pass, &model_for(i), view, proj, 1.0);
+                let highlight = if scene.hovered_hand == Some(i) { 1.0 } else { 0.0 };
+                self.bind_draw(gpu, pass, &model_for(i), view, proj, 1.0, highlight);
                 hand.joints.draw(pass);
             }
             pass.set_pipeline(&self.lit_blend);
@@ -412,7 +418,8 @@ impl Renderer {
 
         let alpha = if scene.translucent { 0.30 } else { 1.0 };
         for (i, hand) in frame.hands.iter().enumerate() {
-            self.bind_draw(gpu, pass, &model_for(i), view, proj, alpha);
+            let highlight = if scene.hovered_hand == Some(i) { 1.0 } else { 0.0 };
+            self.bind_draw(gpu, pass, &model_for(i), view, proj, alpha, highlight);
             hand.hand.draw(pass);
         }
     }

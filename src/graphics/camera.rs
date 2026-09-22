@@ -253,3 +253,20 @@ impl Camera for FreeCamera {
         *self = FreeCamera::new();
     }
 }
+
+/// Perspective projection matrix used for rendering the 3D scene.
+pub fn perspective_projection(aspect: f32) -> Mat4 {
+    glam::camera::rh::proj::directx::perspective(45.0f32.to_radians(), aspect, 0.1, 500.0)
+}
+
+/// Computes a world-space ray (origin, normalized direction) from viewport normalized coordinates `(x, y)` in `[0, 1]`.
+pub fn ray_from_screen(view: &Mat4, proj: &Mat4, screen_norm: [f32; 2]) -> (Vec3, Vec3) {
+    let ndc_x = screen_norm[0] * 2.0 - 1.0;
+    let ndc_y = 1.0 - screen_norm[1] * 2.0; // Y is inverted in NDC
+
+    let inv_vp = (*proj * *view).inverse();
+    let near_pt = inv_vp.project_point3(Vec3::new(ndc_x, ndc_y, 0.0));
+    let far_pt = inv_vp.project_point3(Vec3::new(ndc_x, ndc_y, 1.0));
+    let dir = (far_pt - near_pt).normalize();
+    (near_pt, dir)
+}

@@ -139,6 +139,24 @@ fn test_camera_interop() {
 }
 
 #[test]
+fn test_ray_from_screen() {
+    use infant_hand_motion_viewer::graphics::{Camera, FreeCamera, perspective_projection, ray_from_screen};
+
+    let cam = FreeCamera::new();
+    let view = cam.view_matrix();
+    let proj = perspective_projection(1.0);
+
+    // Center of screen [0.5, 0.5] should point straight along forward direction -Z
+    let (origin, dir) = ray_from_screen(&view, &proj, [0.5, 0.5]);
+    assert!(origin.is_finite());
+    assert!(dir.is_finite());
+    assert!((dir.length() - 1.0).abs() < 1e-4);
+    assert!((dir.x).abs() < 1e-4);
+    assert!((dir.y).abs() < 1e-4);
+    assert!(dir.z < -0.99);
+}
+
+#[test]
 fn test_prepare_frame_logic() {
     let mut hand = HandData {
         verts: vec![Vec3::new(0.0, 0.0, 2.0); 778],
@@ -253,6 +271,7 @@ fn render_scene_pixels(gpu: &infant_hand_motion_viewer::graphics::Gpu, samples: 
             transform: None,
             reference_depth: None,
             show_camera_marker: false,
+            hovered_hand: None,
         },
     );
 

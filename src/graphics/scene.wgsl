@@ -3,6 +3,9 @@ struct Uniforms {
     view: mat4x4<f32>,
     proj: mat4x4<f32>,
     alpha: f32,
+    highlight: f32,
+    _pad0: f32,
+    _pad1: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -71,6 +74,11 @@ fn fs_lit(in: VsOut) -> @location(0) vec4<f32> {
 
     let dir1 = normalize(LIGHT1_POS - frag);
     lit += in.color.rgb * LIGHT1_DIFFUSE * max(dot(normal, dir1), 0.0);
+
+    if (u.highlight > 0.0) {
+        let rim = pow(1.0 - max(dot(normal, eye), 0.0), 3.0);
+        lit = mix(lit, vec3<f32>(1.0, 1.0, 1.0), u.highlight * 0.25) + vec3<f32>(1.0, 1.0, 1.0) * (rim * u.highlight * 0.45);
+    }
 
     return vec4<f32>(lit, in.color.a * u.alpha);
 }

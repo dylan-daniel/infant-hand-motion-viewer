@@ -6,7 +6,7 @@ pub mod image;
 pub mod mesh;
 pub mod renderer;
 
-pub use camera::{Camera, FreeCamera, LOOK_SENSITIVITY, OrbitCamera};
+pub use camera::{Camera, FreeCamera, LOOK_SENSITIVITY, OrbitCamera, perspective_projection, ray_from_screen};
 pub use framebuffer::Framebuffer;
 pub use gpu::{
     COLOR_FORMAT, DEPTH_FORMAT, Gpu, MSAA_CANDIDATES, pick_sample_count, required_device_features,

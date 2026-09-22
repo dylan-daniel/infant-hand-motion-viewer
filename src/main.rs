@@ -1214,6 +1214,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         transform: state.transform.as_ref(),
         reference_depth: state.depth_reference,
         show_camera_marker: state.settings.show_camera_marker,
+        hovered_hand: None,
     };
     state
         .renderer
