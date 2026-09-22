@@ -14,5 +14,5 @@ pub use gpu::{
 };
 pub use hand_overlay::{HandOverlay, overlay_focal_length, prepare_overlay_hands};
 pub use image::ImageTexture;
-pub use mesh::{FrameGpu, GpuMesh, HandGpu, PreparedFrame, PreparedHand, prepare_frame};
+pub use mesh::{FrameGpu, GpuMesh, HandGpu, PreparedFrame, PreparedHand, hand_display_color, prepare_frame};
 pub use renderer::{Renderer, SceneRender};

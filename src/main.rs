@@ -1046,6 +1046,12 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             ..transport_base
         };
 
+        let cam: &dyn Camera = if state.camera_is_free {
+            &state.free_cam
+        } else {
+            &state.orbit_cam
+        };
+
         let v_res = draw_viewport_window(
             ui,
             Some(state.scene_texture.texture_id()),
@@ -1056,6 +1062,9 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             state.settings.show_controls,
             &viewport_transport,
             &state.icons,
+            cam,
+            state.transform.as_ref(),
+            state.depth_reference,
             None,
         );
 
@@ -1214,7 +1223,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         transform: state.transform.as_ref(),
         reference_depth: state.depth_reference,
         show_camera_marker: state.settings.show_camera_marker,
-        hovered_hand: None,
+        hovered_hand: viewport_result.hovered_hand_index,
     };
     state
         .renderer

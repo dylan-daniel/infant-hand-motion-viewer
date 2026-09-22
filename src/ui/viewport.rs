@@ -3,9 +3,11 @@ use dear_imgui_rs::{
     WindowFlags,
 };
 
+use crate::data::{HandData, Transform, mano_faces, ray_mesh_intersect};
+use crate::graphics::{Camera, FrameGpu, hand_display_color, perspective_projection, ray_from_screen};
 use crate::ui::icons::UiIcons;
 use crate::ui::transport::{FLAG_LAYERS, Transport, TransportState, draw_transport_bar};
-use crate::ui::{FPS_FONT_SIZE, PLAYBACK_BAR_HEIGHT};
+use crate::ui::{FPS_FONT_SIZE, PLAYBACK_BAR_HEIGHT, padded_tooltip};
 
 pub struct ViewportResult {
     pub width: u32,
@@ -14,6 +16,7 @@ pub struct ViewportResult {
     pub focused: bool,
     pub show_controls: bool,
     pub transport: TransportState,
+    pub hovered_hand_index: Option<usize>,
 }
 
 struct ControlRow {
@@ -281,6 +284,9 @@ pub fn draw_viewport_window(
     show_controls: bool,
     transport: &Transport,
     icons: &UiIcons,
+    cam: &dyn Camera,
+    transform: Option<&Transform>,
+    depth_reference: Option<f32>,
     dock_id: Option<Id>,
 ) -> ViewportResult {
     let mut result = ViewportResult {
@@ -295,6 +301,7 @@ pub fn draw_viewport_window(
             scrubbing: false,
             speed: transport.speed,
         },
+        hovered_hand_index: None,
     };
 
     if let Some(did) = dock_id {
@@ -325,6 +332,106 @@ pub fn draw_viewport_window(
 
         // Hover is on the 3D scene image only
         result.hovered = ui.is_item_hovered();
+
+        // Hand hit-testing via raycast
+        if result.hovered
+            && let Some(seq) = transport.sequence
+            && let Some(frame) = seq.load_frame(transport.current_frame)
+        {
+            let mouse = ui.io().mouse_pos();
+            let u = (mouse[0] - image_pos[0]) / width as f32;
+            let v = (mouse[1] - image_pos[1]) / height as f32;
+
+            if (0.0..=1.0).contains(&u) && (0.0..=1.0).contains(&v) {
+                let aspect = if height != 0 { width as f32 / height as f32 } else { 1.0 };
+                let proj = perspective_projection(aspect);
+                let (ray_origin, ray_dir) = ray_from_screen(&cam.view_matrix(), &proj, [u, v]);
+
+                let mut best_hit: Option<(f32, usize, &HandData)> = None;
+                let mut rendered_hand_index = 0usize;
+
+                for hand in frame {
+                    if hand_display_color(hand, transport.per_track_coloring).is_none() {
+                        continue;
+                    }
+
+                    let depth = if hand.verts.is_empty() {
+                        0.0
+                    } else {
+                        let sum: f32 = hand.verts.iter().map(|p| p.z).sum();
+                        sum / hand.verts.len() as f32
+                    };
+                    let scale = match depth_reference {
+                        Some(ref_d) if depth != 0.0 => ref_d / depth,
+                        _ => 1.0,
+                    };
+                    let model = FrameGpu::hand_matrix(transform, scale);
+                    let inv_model = model.inverse();
+                    let local_origin = inv_model.project_point3(ray_origin);
+                    let local_dir = inv_model.transform_vector3(ray_dir).normalize();
+                    let faces = mano_faces(hand.is_right);
+
+                    if let Some(t_local) = ray_mesh_intersect(local_origin, local_dir, &hand.verts, &faces) {
+                        let world_dist = t_local * scale;
+                        if best_hit.as_ref().is_none_or(|&(closest, ..)| world_dist < closest) {
+                            best_hit = Some((world_dist, rendered_hand_index, hand));
+                        }
+                    }
+
+                    rendered_hand_index += 1;
+                }
+
+                if let Some((_, hand_idx, hand)) = best_hit {
+                    result.hovered_hand_index = Some(hand_idx);
+
+                    padded_tooltip(ui, || {
+                        let color = hand_display_color(hand, transport.per_track_coloring)
+                            .unwrap_or(crate::data::DEFAULT_COLOR);
+                        ui.color_button("##hand_color_swatch", [color.x, color.y, color.z, 1.0]);
+                        ui.same_line();
+                        let side_str = if hand.is_right { "Right" } else { "Left" };
+                        ui.text(format!("Track #{} ({side_str})", hand.hand_track_id));
+
+                        if !hand.label.is_empty() {
+                            ui.text_disabled(format!("Label: {}", hand.label));
+                        }
+
+                        let active_flags: Vec<usize> = (0..FLAG_LAYERS.len())
+                            .filter(|&i| {
+                                hand.flags[i]
+                                    && transport.flag_layers_enabled[i]
+                                    && (!FLAG_LAYERS[i].hidden_hand_involved || transport.per_track_coloring)
+                            })
+                            .collect();
+
+                        if !active_flags.is_empty() {
+                            ui.separator();
+                            ui.text("Active Flags:");
+                            for idx in active_flags {
+                                let c = FLAG_LAYERS[idx].color;
+                                ui.color_button(
+                                    format!("##flag_color_{idx}"),
+                                    [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0, 1.0],
+                                );
+                                ui.same_line();
+                                ui.text(FLAG_LAYERS[idx].display_name);
+                            }
+                        }
+
+                        if let Some(ref camera) = hand.camera {
+                            ui.separator();
+                            ui.text(format!(
+                                "cam_t: [{:.2}, {:.2}, {:.2}]",
+                                camera.cam_t.x, camera.cam_t.y, camera.cam_t.z
+                            ));
+                            ui.text(format!("depth: {:.2} m", camera.cam_t.z.abs()));
+                            ui.text(format!("focal length: {:.1} px", camera.focal_length));
+                            ui.text(format!("image: {} x {}", camera.img_w, camera.img_h));
+                        }
+                    });
+                }
+            }
+        }
 
         // Top-left overlay: FPS and status rendered with crisp overlay font
         {
