@@ -46,6 +46,20 @@ pub fn finger_of(joint: usize) -> usize {
     if joint == 0 { 0 } else { (joint - 1) / 4 + 1 }
 }
 
+/// Distance between the thumb and index fingertips, or `None` without a full joint set.
+pub fn grasp_aperture(joints: &[Vec3]) -> Option<f32> {
+    Some(joints.get(4)?.distance(*joints.get(8)?))
+}
+
+/// Wrist-to-middle-fingertip length summed along the bones, so it stays constant as the finger curls.
+pub fn hand_length(joints: &[Vec3]) -> Option<f32> {
+    const CHAIN: [usize; 5] = [0, 9, 10, 11, 12];
+    CHAIN
+        .windows(2)
+        .map(|pair| Some(joints.get(pair[0])?.distance(*joints.get(pair[1])?)))
+        .sum()
+}
+
 /// Computes a distinct, stable color for a given `hand_track_id`.
 /// Uses the golden ratio conjugate to distribute hues evenly around the color wheel.
 pub fn track_color(hand_track_id: i32) -> Vec4 {

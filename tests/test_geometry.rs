@@ -1,7 +1,36 @@
 use glam::Vec3;
 use infant_hand_motion_viewer::data::geometry::{
-    DEFAULT_COLOR, HandData, bounding_diagonal, build_joint_mesh, compute_transform, finger_of, mano_faces, track_color,
+    DEFAULT_COLOR, HandData, bounding_diagonal, build_joint_mesh, compute_transform, finger_of, grasp_aperture,
+    hand_length, mano_faces, track_color,
 };
+
+#[test]
+fn test_grasp_aperture_is_thumb_to_index_tip_distance() {
+    let mut joints = vec![Vec3::ZERO; 21];
+    joints[4] = Vec3::new(0.01, 0.0, 0.0);
+    joints[8] = Vec3::new(0.04, 0.04, 0.0);
+    assert!((grasp_aperture(&joints).unwrap() - 0.05).abs() < 1e-6);
+    assert_eq!(grasp_aperture(&joints[..5]), None);
+}
+
+#[test]
+fn test_hand_length_is_unchanged_by_curling_the_middle_finger() {
+    let mut straight = vec![Vec3::ZERO; 21];
+    straight[9] = Vec3::new(0.0, 0.05, 0.0);
+    straight[10] = Vec3::new(0.0, 0.08, 0.0);
+    straight[11] = Vec3::new(0.0, 0.10, 0.0);
+    straight[12] = Vec3::new(0.0, 0.12, 0.0);
+
+    let mut curled = straight.clone();
+    curled[10] = Vec3::new(0.0, 0.05, 0.03);
+    curled[11] = Vec3::new(0.0, 0.03, 0.03);
+    curled[12] = Vec3::new(0.0, 0.03, 0.01);
+
+    let straight_len = hand_length(&straight).unwrap();
+    assert!((straight_len - 0.12).abs() < 1e-6);
+    assert!((hand_length(&curled).unwrap() - straight_len).abs() < 1e-6);
+    assert_eq!(hand_length(&straight[..12]), None);
+}
 
 #[test]
 fn test_track_color_deterministic() {
