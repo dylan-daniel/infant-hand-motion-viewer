@@ -175,6 +175,7 @@ impl AppState {
                 self.current_frame = 0;
             }
         }
+        self.explorer.set_selected(label);
         self.current_gpu = None;
         self.loaded_frame = None;
         self.transform = None;

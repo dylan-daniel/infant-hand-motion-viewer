@@ -7,7 +7,9 @@ use std::sync::{
     atomic::{AtomicU64, AtomicUsize, Ordering as AtomicOrdering},
 };
 
-use dear_imgui_rs::{Condition, Id, StyleColor, TextureId, Ui, WindowFlags};
+use dear_imgui_rs::{
+    Condition, Id, StyleColor, TableColumnFlags, TableColumnWidth, TableFlags, TextureId, Ui, WindowFlags,
+};
 
 use crate::data::hand_export::read_hexport_metadata;
 use crate::remote::{ExplorerNode, RemoteClient};
@@ -91,6 +93,9 @@ pub struct FileExplorer {
     scan_error: String,
 
     open_state: HashMap<String, bool>,
+    selected_path: String,
+    /// Widest row (icon + name + indent) from the last frame, so the column and scroll range cover it.
+    content_width: f32,
 
     in_flight: Arc<AtomicUsize>,
     latest_scan: Arc<AtomicU64>,
@@ -109,12 +114,19 @@ impl FileExplorer {
             scan_error: String::new(),
 
             open_state: HashMap::new(),
+            selected_path: String::new(),
+            content_width: 0.0,
 
             in_flight: Arc::new(AtomicUsize::new(0)),
             latest_scan: Arc::new(AtomicU64::new(0)),
             ready_root: Arc::new(Mutex::new(None)),
             worker: Arc::new(WorkerQueue::new()),
         }
+    }
+
+    /// Highlight the given file as the one currently open.
+    pub fn set_selected(&mut self, path: &str) {
+        self.selected_path = path.to_string();
     }
 
     pub fn mode(&self) -> SourceMode {
@@ -426,34 +438,40 @@ impl FileExplorer {
             self.draw_toolbar(ui, icons, &mut result, is_remote, scanning);
             ui.separator();
 
-            ui.child_window("##tree_scroll")
-                .flags(WindowFlags::HORIZONTAL_SCROLLBAR)
-                .build(ui, || {
-                    if let Some(node) = self.root_node.clone() {
-                        let mut draw = TreeDraw {
-                            icons,
-                            is_remote,
-                            result: &mut result,
-                            open_state: &mut self.open_state,
-                            row_left: ui.cursor_screen_pos()[0],
-                            row_width: ui.content_region_avail()[0],
-                            row_index: 0,
-                        };
-                        Self::draw_node(ui, &node, &mut draw, 0);
-                    } else if scanning {
-                        ui.text_disabled(if is_remote {
-                            "Scanning remote server..."
-                        } else {
-                            "Scanning..."
-                        });
-                    } else if !self.scan_error.is_empty() {
-                        ui.text_colored([1.0, 0.4, 0.4, 1.0], format!("Scan error: {}", self.scan_error));
-                    } else if is_remote {
-                        ui.text_disabled("No .hexport files found on remote server.");
-                    } else {
-                        ui.text_disabled("No .hexport files found.");
-                    }
+            if let Some(node) = self.root_node.clone() {
+                let flags = TableFlags::ROW_BG | TableFlags::SCROLL_X | TableFlags::SCROLL_Y;
+                let column_width = ui.content_region_avail()[0].max(self.content_width);
+                if let Some(_table) = ui.begin_table_with_sizing("##tree", 1, flags, [0.0, 0.0], 0.0) {
+                    ui.table_setup_column(
+                        "name",
+                        TableColumnFlags::NONE,
+                        Some(TableColumnWidth::fixed(column_width)),
+                    );
+                    let mut draw = TreeDraw {
+                        icons,
+                        is_remote,
+                        result: &mut result,
+                        open_state: &mut self.open_state,
+                        selected_path: &self.selected_path,
+                        content_right: 0.0,
+                    };
+                    let row_left = ui.cursor_screen_pos()[0];
+                    Self::draw_node(ui, &node, &mut draw, 0);
+                    self.content_width = draw.content_right - row_left;
+                }
+            } else if scanning {
+                ui.text_disabled(if is_remote {
+                    "Scanning remote server..."
+                } else {
+                    "Scanning..."
                 });
+            } else if !self.scan_error.is_empty() {
+                ui.text_colored([1.0, 0.4, 0.4, 1.0], format!("Scan error: {}", self.scan_error));
+            } else if is_remote {
+                ui.text_disabled("No .hexport files found on remote server.");
+            } else {
+                ui.text_disabled("No .hexport files found.");
+            }
         });
 
         result
@@ -590,25 +608,9 @@ impl FileExplorer {
         }
     }
 
-    /// Paint the alternating row background behind the row about to be drawn, spanning the full content width.
-    fn stripe_row(ui: &Ui, draw: &mut TreeDraw) {
-        if draw.row_index % 2 == 1 {
-            let row_top = ui.cursor_screen_pos()[1];
-            let row_pitch = ui.text_line_height_with_spacing();
-            ui.get_window_draw_list()
-                .add_rect(
-                    [draw.row_left, row_top],
-                    [draw.row_left + draw.row_width, row_top + row_pitch],
-                    ui.style_color(StyleColor::TableRowBgAlt),
-                )
-                .filled(true)
-                .build();
-        }
-        draw.row_index += 1;
-    }
-
     fn draw_node(ui: &Ui, node: &ExplorerNode, draw: &mut TreeDraw, depth: usize) {
-        Self::stripe_row(ui, draw);
+        ui.table_next_row();
+        ui.table_next_column();
         let node_left = ui.cursor_screen_pos()[0];
 
         if node.is_file {
@@ -616,12 +618,14 @@ impl FileExplorer {
                 .tree_node_config(&node.path)
                 .label("")
                 .leaf(true)
+                .selected(node.path == draw.selected_path)
                 .no_tree_push_on_open(true)
                 .open_on_arrow(true)
                 .open_on_double_click(true)
                 .span_full_width(true)
                 .push();
-            Self::draw_node_label(ui, draw.icons.file_hexport, &node.name, node_left);
+            let right = Self::draw_node_label(ui, draw.icons.file_hexport, &node.name, node_left);
+            draw.content_right = draw.content_right.max(right);
 
             if node_token.is_some() && ui.is_item_clicked() {
                 draw.result.open_file = Some(node.path.clone());
@@ -645,7 +649,8 @@ impl FileExplorer {
             } else {
                 draw.icons.folder_closed
             };
-            Self::draw_node_label(ui, icon, &node.name, node_left);
+            let right = Self::draw_node_label(ui, icon, &node.name, node_left);
+            draw.content_right = draw.content_right.max(right);
 
             if open {
                 for child in &node.children {
@@ -656,7 +661,7 @@ impl FileExplorer {
     }
 
     /// Paint the icon and name over the row just submitted with an empty label, so the icon sits between the arrow and the text.
-    fn draw_node_label(ui: &Ui, icon: Option<TextureId>, name: &str, node_left: f32) {
+    fn draw_node_label(ui: &Ui, icon: Option<TextureId>, name: &str, node_left: f32) -> f32 {
         let icon_size = ui.current_font_size();
         let item_min = ui.item_rect_min();
         let item_max = ui.item_rect_max();
@@ -681,6 +686,7 @@ impl FileExplorer {
             ui.style_color(StyleColor::Text),
             name,
         );
+        text_x + ui.calc_text_size(name)[0] + ui.clone_style().item_spacing()[0]
     }
 }
 
@@ -690,9 +696,8 @@ struct TreeDraw<'a> {
     is_remote: bool,
     result: &'a mut ExplorerResult,
     open_state: &'a mut HashMap<String, bool>,
-    row_left: f32,
-    row_width: f32,
-    row_index: usize,
+    selected_path: &'a str,
+    content_right: f32,
 }
 
 impl Default for FileExplorer {
