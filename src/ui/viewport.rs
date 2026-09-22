@@ -3,7 +3,7 @@ use dear_imgui_rs::{
     WindowFlags,
 };
 
-use crate::data::{HandData, Transform, mano_faces, ray_mesh_intersect};
+use crate::data::{HandData, Transform, grasp_aperture, hand_length, mano_faces, ray_mesh_intersect};
 use crate::graphics::{Camera, FrameGpu, hand_display_color, perspective_projection, ray_from_screen};
 use crate::ui::icons::UiIcons;
 use crate::ui::transport::{FLAG_LAYERS, Transport, TransportState, draw_transport_bar};
@@ -398,6 +398,12 @@ pub fn draw_viewport_window(
                             ui.text_disabled(format!("Label: {}", hand.label));
                         }
                         ui.text_disabled(format!("Scale: {scale:.3}"));
+                        if let Some(length) = hand_length(&hand.joints) {
+                            ui.text_disabled(format!("Hand length: {:.1} cm", length * 100.0));
+                        }
+                        if let Some(aperture) = grasp_aperture(&hand.joints) {
+                            ui.text_disabled(format!("Grasp aperture: {:.1} cm", aperture * 100.0));
+                        }
 
                         let active_flags: Vec<usize> = (0..FLAG_LAYERS.len())
                             .filter(|&i| {
