@@ -641,8 +641,6 @@ impl FileExplorer {
                 .tree_node_config(&node.path)
                 .label("")
                 .opened(should_open, Condition::FirstUseEver)
-                .open_on_arrow(true)
-                .open_on_double_click(true)
                 .span_full_width(true)
                 .push();
             let open = node_token.is_some();
