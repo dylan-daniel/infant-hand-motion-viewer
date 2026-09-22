@@ -1065,6 +1065,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             cam,
             state.transform.as_ref(),
             state.depth_reference,
+            state.orbiting || state.panning,
             None,
         );
 

@@ -287,6 +287,7 @@ pub fn draw_viewport_window(
     cam: &dyn Camera,
     transform: Option<&Transform>,
     depth_reference: Option<f32>,
+    camera_dragging: bool,
     dock_id: Option<Id>,
 ) -> ViewportResult {
     let mut result = ViewportResult {
@@ -335,6 +336,7 @@ pub fn draw_viewport_window(
 
         // Hand hit-testing via raycast
         if result.hovered
+            && !camera_dragging
             && let Some(seq) = transport.sequence
             && let Some(frame) = seq.load_frame(transport.current_frame)
         {
