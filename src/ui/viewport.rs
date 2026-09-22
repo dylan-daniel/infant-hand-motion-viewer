@@ -349,7 +349,7 @@ pub fn draw_viewport_window(
                 let proj = perspective_projection(aspect);
                 let (ray_origin, ray_dir) = ray_from_screen(&cam.view_matrix(), &proj, [u, v]);
 
-                let mut best_hit: Option<(f32, usize, &HandData)> = None;
+                let mut best_hit: Option<(f32, usize, &HandData, f32)> = None;
                 let mut rendered_hand_index = 0usize;
 
                 for hand in frame {
@@ -376,14 +376,14 @@ pub fn draw_viewport_window(
                     if let Some(t_local) = ray_mesh_intersect(local_origin, local_dir, &hand.verts, &faces) {
                         let world_dist = t_local * scale;
                         if best_hit.as_ref().is_none_or(|&(closest, ..)| world_dist < closest) {
-                            best_hit = Some((world_dist, rendered_hand_index, hand));
+                            best_hit = Some((world_dist, rendered_hand_index, hand, scale));
                         }
                     }
 
                     rendered_hand_index += 1;
                 }
 
-                if let Some((_, hand_idx, hand)) = best_hit {
+                if let Some((_, hand_idx, hand, scale)) = best_hit {
                     result.hovered_hand_index = Some(hand_idx);
 
                     padded_tooltip(ui, || {
@@ -397,6 +397,7 @@ pub fn draw_viewport_window(
                         if !hand.label.is_empty() {
                             ui.text_disabled(format!("Label: {}", hand.label));
                         }
+                        ui.text_disabled(format!("Scale: {scale:.3}"));
 
                         let active_flags: Vec<usize> = (0..FLAG_LAYERS.len())
                             .filter(|&i| {
