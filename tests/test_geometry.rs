@@ -54,6 +54,7 @@ fn test_compute_transform_bounds() {
         hand_track_id: 0,
         label: "infant".into(),
         camera: None,
+        flags: [false; 7],
     };
     let transform = compute_transform(&[hand]);
     assert!(transform.scale > 0.0);
@@ -65,4 +66,29 @@ fn test_bounding_diagonal() {
     let points = [Vec3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 2.0, 2.0)];
     let diag = bounding_diagonal(&points);
     assert!((diag - 3.0).abs() < 1e-6);
+}
+
+#[test]
+fn test_ray_triangle_and_mesh_intersection() {
+    use infant_hand_motion_viewer::data::geometry::{ray_mesh_intersect, ray_triangle_intersect};
+
+    let v0 = Vec3::new(-1.0, -1.0, 0.0);
+    let v1 = Vec3::new(1.0, -1.0, 0.0);
+    let v2 = Vec3::new(0.0, 1.0, 0.0);
+
+    let ray_origin = Vec3::new(0.0, 0.0, 5.0);
+    let ray_dir = Vec3::new(0.0, 0.0, -1.0);
+
+    let hit = ray_triangle_intersect(ray_origin, ray_dir, v0, v1, v2);
+    assert!(hit.is_some());
+    let t = hit.unwrap();
+    assert!((t - 5.0).abs() < 1e-5);
+
+    let miss_dir = Vec3::new(0.0, 1.0, 0.0);
+    assert!(ray_triangle_intersect(ray_origin, miss_dir, v0, v1, v2).is_none());
+
+    let verts = vec![v0, v1, v2];
+    let faces = vec![[0u16, 1u16, 2u16]];
+    assert_eq!(ray_mesh_intersect(ray_origin, ray_dir, &verts, &faces), Some(5.0));
+    assert_eq!(ray_mesh_intersect(ray_origin, miss_dir, &verts, &faces), None);
 }

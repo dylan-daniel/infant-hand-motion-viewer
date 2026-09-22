@@ -144,6 +144,7 @@ fn mano_hand(is_right: bool, label: &str, track: i32, cam_t_z: f32) -> HandData 
             img_w: SIZE,
             img_h: SIZE,
         }),
+        flags: [false; 7],
     }
 }
 

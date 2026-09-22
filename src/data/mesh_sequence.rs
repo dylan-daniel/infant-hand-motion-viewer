@@ -84,6 +84,16 @@ impl MeshSequence {
 
         for row in rows {
             let hand = mano_forward(&row.params);
+            let row_flags = [
+                row.flag_same_side_infant_conflict != 0,
+                row.flag_same_side_infant_unknown_conflict != 0,
+                row.flag_translation_jump != 0,
+                row.flag_pose_rotation_jump != 0,
+                row.flag_scale_jump != 0,
+                row.flag_track_contaminated != 0,
+                row.flag_track_fragmented != 0,
+            ];
+
             let data = HandData {
                 verts: hand.verts,
                 joints: hand.joints,
@@ -96,6 +106,7 @@ impl MeshSequence {
                     img_w: row.img_w.max(0) as u32,
                     img_h: row.img_h.max(0) as u32,
                 }),
+                flags: row_flags,
             };
 
             let frame_num = row.frame;
@@ -106,16 +117,6 @@ impl MeshSequence {
                 .entry(frame_num)
                 .or_insert([false; FLAG_LAYER_COUNT]);
             let is_infant = row.label == "infant";
-
-            let row_flags = [
-                row.flag_same_side_infant_conflict != 0,
-                row.flag_same_side_infant_unknown_conflict != 0,
-                row.flag_translation_jump != 0,
-                row.flag_pose_rotation_jump != 0,
-                row.flag_scale_jump != 0,
-                row.flag_track_contaminated != 0,
-                row.flag_track_fragmented != 0,
-            ];
 
             for i in 0..FLAG_LAYER_COUNT {
                 if row_flags[i] {

@@ -87,7 +87,7 @@ pub struct HandCamera {
 }
 
 /// One hand in one frame: the moving MANO surface vertices and joint positions, plus identity metadata.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct HandData {
     pub verts: Vec<Vec3>,
     pub joints: Vec<Vec3>,
@@ -96,6 +96,8 @@ pub struct HandData {
     pub label: String,
     /// The camera this hand was fitted under, when the source recorded one.
     pub camera: Option<HandCamera>,
+    /// Flags from the hexport row for this hand (e.g. conflicts, jumps, track contamination).
+    pub flags: [bool; 7],
 }
 
 /// Fixed translation and scale framing a sequence on the 3D grid.
@@ -269,6 +271,50 @@ pub fn bounding_diagonal(points: &[Vec3]) -> f32 {
         high = high.max(p);
     }
     (high - low).length()
+}
+
+/// Möller–Trumbore ray-triangle intersection algorithm. Returns distance `t` along the ray if hit.
+pub fn ray_triangle_intersect(ray_origin: Vec3, ray_dir: Vec3, v0: Vec3, v1: Vec3, v2: Vec3) -> Option<f32> {
+    const EPSILON: f32 = 1e-7;
+    let edge1 = v1 - v0;
+    let edge2 = v2 - v0;
+    let h = ray_dir.cross(edge2);
+    let a = edge1.dot(h);
+    if a.abs() < EPSILON {
+        return None;
+    }
+    let f = 1.0 / a;
+    let s = ray_origin - v0;
+    let u = f * s.dot(h);
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let q = s.cross(edge1);
+    let v = f * ray_dir.dot(q);
+    if v < 0.0 || u + v > 1.0 {
+        return None;
+    }
+    let t = f * edge2.dot(q);
+    if t > EPSILON { Some(t) } else { None }
+}
+
+/// Intersects a ray with a triangle mesh, returning the closest intersection distance `t`.
+pub fn ray_mesh_intersect(ray_origin: Vec3, ray_dir: Vec3, verts: &[Vec3], faces: &[[u16; 3]]) -> Option<f32> {
+    let mut closest = f32::MAX;
+    for face in faces {
+        let i0 = face[0] as usize;
+        let i1 = face[1] as usize;
+        let i2 = face[2] as usize;
+        if i0 >= verts.len() || i1 >= verts.len() || i2 >= verts.len() {
+            continue;
+        }
+        if let Some(t) = ray_triangle_intersect(ray_origin, ray_dir, verts[i0], verts[i1], verts[i2])
+            && t < closest
+        {
+            closest = t;
+        }
+    }
+    if closest < f32::MAX { Some(closest) } else { None }
 }
 
 type Triangle = [Vec3; 3];
