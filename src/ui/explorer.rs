@@ -441,6 +441,9 @@ impl FileExplorer {
             if let Some(node) = self.root_node.clone() {
                 let flags = TableFlags::ROW_BG | TableFlags::SCROLL_X | TableFlags::SCROLL_Y;
                 let column_width = ui.content_region_avail()[0].max(self.content_width);
+                // Cell padding would leave gaps above and below the row highlight, which only covers the item height.
+                let cell_padding_x = ui.clone_style().cell_padding()[0];
+                let _cell_padding = ui.push_style_var(dear_imgui_rs::StyleVar::CellPadding([cell_padding_x, 0.0]));
                 if let Some(_table) = ui.begin_table_with_sizing("##tree", 1, flags, [0.0, 0.0], 0.0) {
                     ui.table_setup_column(
                         "name",
