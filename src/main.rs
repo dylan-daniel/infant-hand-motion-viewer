@@ -24,13 +24,15 @@ use infant_hand_motion_viewer::graphics::{
     Camera, FrameGpu, Framebuffer, FreeCamera, Gpu, HandOverlay, ImageTexture, OrbitCamera, Renderer, SceneRender,
     overlay_focal_length, prepare_frame, prepare_overlay_hands, required_device_features, supported_sample_counts,
 };
-use infant_hand_motion_viewer::remote::{ConnectionState, FrameStream, RemoteClient, RemoteConfig};
+use infant_hand_motion_viewer::remote::{ConnectionState, RemoteClient, RemoteConfig};
 use infant_hand_motion_viewer::ui::{
     FileExplorer, MenuState, SourceMode, Transport, UiIcons, draw_flags_window, draw_image_window, draw_menu_bar,
     draw_remote_modal, draw_viewport_window,
 };
 use infant_hand_motion_viewer::util::WorkerQueue;
 use infant_hand_motion_viewer::util::window_placement::{MonitorRect, is_position_reachable};
+use infant_hand_motion_viewer::video::loader::{MISSING_VIDEO_MESSAGE, load_remote_video};
+use infant_hand_motion_viewer::video::{FrameStore, LoadStatus};
 
 /// Longest the window stays hidden waiting for its first presented frame.
 const FIRST_FRAME_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
@@ -129,7 +131,8 @@ struct AppState {
     remote_fetch_worker: Arc<WorkerQueue>,
     remote_open_worker: Arc<WorkerQueue>,
     pending_remote_open: Arc<Mutex<Option<PendingOpen>>>,
-    frame_stream: FrameStream,
+    video: Option<Arc<FrameStore>>,
+    video_worker: WorkerQueue,
     streamed_frame: Option<u32>,
     current_remote_path: String,
     active_sequence_id: Arc<AtomicU64>,
@@ -413,7 +416,6 @@ impl ApplicationHandler for AppRunner {
         };
 
         let remote_client = RemoteClient::new();
-        let frame_stream = FrameStream::new(remote_client.clone());
         let remote_fetch_worker = Arc::new(WorkerQueue::new());
         let remote_open_worker = Arc::new(WorkerQueue::new());
 
@@ -485,7 +487,8 @@ impl ApplicationHandler for AppRunner {
             remote_fetch_worker,
             remote_open_worker,
             pending_remote_open: Arc::new(Mutex::new(None)),
-            frame_stream,
+            video: None,
+            video_worker: WorkerQueue::new(),
             streamed_frame: None,
             current_remote_path: String::new(),
             active_sequence_id: Arc::new(AtomicU64::new(0)),
@@ -801,20 +804,16 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
 
         state.active_sequence_id.fetch_add(1, Ordering::SeqCst);
         state.remote_fetch_worker.clear();
-        state.frame_stream.clear();
+        if let Some(video) = state.video.take() {
+            video.cancel();
+        }
         state.streamed_frame = None;
-        if !state.current_remote_path.is_empty()
-            && let Some(ref seq) = state.sequence
-        {
-            let frame_numbers = seq
-                .frame_numbers()
-                .iter()
-                .filter(|&&n| n > 0)
-                .map(|&n| n as u32)
-                .collect();
-            state
-                .frame_stream
-                .set_sequence(&state.current_remote_path, frame_numbers);
+        if !state.current_remote_path.is_empty() && state.sequence.is_some() {
+            state.video = Some(load_remote_video(
+                state.remote_client.clone(),
+                state.current_remote_path.clone(),
+                &state.video_worker,
+            ));
         }
     }
 
@@ -925,21 +924,19 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             }
         }
 
-        // Remote frames: keep the stream focused on the scrubber and show each frame as soon as it arrives.
+        // Remote frames come from the decoded video, shown as soon as each one is decoded.
         // The previous image stays up meanwhile so scrubbing never flashes blank.
-        if !state.current_remote_path.is_empty()
-            && state.remote_client.is_connected()
+        if let Some(video) = &state.video
             && seq.frame_image_path(state.current_frame).is_none()
             && let Some(f_num) = seq.frame_number(state.current_frame)
             && f_num > 0
         {
             let f_num = f_num as u32;
-            state.frame_stream.set_focus(&state.current_remote_path, f_num);
             if state.streamed_frame != Some(f_num)
-                && let Some(bytes) = state.frame_stream.get(f_num)
+                && let Some(frame) = video.get(f_num as usize - 1)
             {
                 let key = format!("{}#{f_num}", state.current_remote_path);
-                state.frame_image.load_bytes(&state.gpu, &key, bytes);
+                state.frame_image.load_rgb(&state.gpu, &key, frame);
                 state.streamed_frame = Some(f_num);
             }
         }
@@ -950,11 +947,12 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         let hands = seq.hand_count(state.current_frame);
         let s_suffix = if hands == 1 { "" } else { "s" };
         format!(
-            "frame {} / {} - {} hand{}",
+            "frame {} / {} - {} hand{}{}",
             state.current_frame + 1,
             frame_count,
             hands,
-            s_suffix
+            s_suffix,
+            video_status_suffix(state.video.as_deref())
         )
     } else {
         String::new()
@@ -1305,6 +1303,22 @@ struct OverlayKey {
     image_generation: u64,
     image_version: u64,
     sample_count: u32,
+}
+
+fn video_status_suffix(video: Option<&FrameStore>) -> String {
+    let Some(video) = video else {
+        return String::new();
+    };
+    match video.status() {
+        LoadStatus::Downloading => " - downloading video".to_string(),
+        LoadStatus::Decoding => match video.expected() {
+            0 => format!(" - decoding video ({})", video.len()),
+            total => format!(" - decoding video ({}/{total})", video.len()),
+        },
+        LoadStatus::Ready => String::new(),
+        LoadStatus::Missing => format!(" - {MISSING_VIDEO_MESSAGE}"),
+        LoadStatus::Failed(err) => format!(" - video error: {err}"),
+    }
 }
 
 /// Draws the current frame's hands over the frame image with the WiLoR demo camera, when the hand overlay is on and

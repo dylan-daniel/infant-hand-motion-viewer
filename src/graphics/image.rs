@@ -5,6 +5,7 @@ use dear_imgui_wgpu::wgpu;
 
 use crate::graphics::gpu::{COLOR_FORMAT, Gpu};
 use crate::util::WorkerQueue;
+use crate::video::RgbFrame;
 
 struct DecodedImage {
     path: String,
@@ -16,6 +17,7 @@ struct DecodedImage {
 struct ImageShared {
     desired_path: String,
     desired_bytes: Option<Arc<Vec<u8>>>,
+    desired_raw: Option<RgbFrame>,
     worker_busy: bool,
     pending: Option<DecodedImage>,
 }
@@ -46,6 +48,7 @@ impl ImageTexture {
             shared: Arc::new(Mutex::new(ImageShared {
                 desired_path: String::new(),
                 desired_bytes: None,
+                desired_raw: None,
                 worker_busy: false,
                 pending: None,
             })),
@@ -56,15 +59,20 @@ impl ImageTexture {
     /// Request `path` for display. Decodes asynchronously off the render thread.
     /// Returns true if a valid texture is currently available.
     pub fn load(&mut self, gpu: &Gpu, path: &str) -> bool {
-        self.request(gpu, path, None)
+        self.request(gpu, path, None, None)
     }
 
     /// Like [`load`](Self::load), but decodes already-fetched encoded image `bytes`; `key` identifies the image.
     pub fn load_bytes(&mut self, gpu: &Gpu, key: &str, bytes: Arc<Vec<u8>>) -> bool {
-        self.request(gpu, key, Some(bytes))
+        self.request(gpu, key, Some(bytes), None)
     }
 
-    fn request(&mut self, gpu: &Gpu, path: &str, bytes: Option<Arc<Vec<u8>>>) -> bool {
+    /// Like [`load`](Self::load), but shows an already-decoded RGB `frame`; `key` identifies the image.
+    pub fn load_rgb(&mut self, gpu: &Gpu, key: &str, frame: RgbFrame) -> bool {
+        self.request(gpu, key, None, Some(frame))
+    }
+
+    fn request(&mut self, gpu: &Gpu, path: &str, bytes: Option<Arc<Vec<u8>>>, raw: Option<RgbFrame>) -> bool {
         self.upload_ready(gpu);
 
         let mut submit = false;
@@ -73,6 +81,7 @@ impl ImageTexture {
             if path != shared.desired_path || (self.texture.is_none() && !shared.worker_busy) {
                 shared.desired_path = path.to_string();
                 shared.desired_bytes = bytes;
+                shared.desired_raw = raw;
                 if !shared.worker_busy {
                     shared.worker_busy = true;
                     submit = true;
@@ -92,10 +101,30 @@ impl ImageTexture {
 
     fn decode_loop(shared: Arc<Mutex<ImageShared>>) {
         loop {
-            let (target, bytes) = {
+            let (target, bytes, raw) = {
                 let s = shared.lock().unwrap();
-                (s.desired_path.clone(), s.desired_bytes.clone())
+                let raw = s.desired_raw.as_ref().map(|f| (f.width, f.height, Arc::clone(&f.rgb)));
+                (s.desired_path.clone(), s.desired_bytes.clone(), raw)
             };
+
+            if let Some((width, height, rgb)) = raw {
+                let mut rgba = Vec::with_capacity(rgb.len() / 3 * 4);
+                for px in rgb.chunks_exact(3) {
+                    rgba.extend_from_slice(&[px[0], px[1], px[2], 255]);
+                }
+                let mut s = shared.lock().unwrap();
+                s.pending = Some(DecodedImage {
+                    path: target.clone(),
+                    width,
+                    height,
+                    rgba,
+                });
+                if s.desired_path == target {
+                    s.worker_busy = false;
+                    return;
+                }
+                continue;
+            }
 
             let opened = match &bytes {
                 Some(bytes) => Some(image::load_from_memory(bytes)),
@@ -163,6 +192,7 @@ impl ImageTexture {
                 let mut s = self.shared.lock().unwrap();
                 s.desired_path.clear();
                 s.desired_bytes = None;
+                s.desired_raw = None;
             }
             return;
         }
@@ -211,6 +241,7 @@ impl ImageTexture {
             let mut s = self.shared.lock().unwrap();
             s.desired_path.clear();
             s.desired_bytes = None;
+            s.desired_raw = None;
             s.pending = None;
         }
         self.release();
