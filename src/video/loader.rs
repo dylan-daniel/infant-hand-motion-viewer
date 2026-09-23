@@ -7,7 +7,7 @@ use crate::remote::RemoteClient;
 use crate::util::WorkerQueue;
 
 use super::cache::{VideoCache, is_video_hash, video_hash_from_export_path};
-use super::decoder::decode_into;
+use super::decoder::{decode_into, ffmpeg_available, missing_ffmpeg_message};
 use super::frame_store::{FrameStore, LoadStatus};
 
 static SPOOL_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -45,6 +45,9 @@ pub fn load_remote_video(
     worker.submit(move || {
         if job_store.is_cancelled() {
             return;
+        }
+        if !ffmpeg_available() {
+            return job_store.set_status(LoadStatus::Failed(missing_ffmpeg_message()));
         }
         if let (Some(cache), Some(hash)) = (&cache, video_hash_from_export_path(&remote_path))
             && let Some(path) = cache.get(&hash)

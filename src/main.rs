@@ -31,6 +31,7 @@ use infant_hand_motion_viewer::ui::{
 };
 use infant_hand_motion_viewer::util::WorkerQueue;
 use infant_hand_motion_viewer::util::window_placement::{MonitorRect, is_position_reachable};
+use infant_hand_motion_viewer::video::decoder::{ffmpeg_available, missing_ffmpeg_message};
 use infant_hand_motion_viewer::video::loader::{MISSING_VIDEO_MESSAGE, load_remote_video};
 use infant_hand_motion_viewer::video::{FrameStore, LoadStatus};
 
@@ -1443,6 +1444,15 @@ fn sync_frame_texture(state: &mut AppState) -> Option<TextureId> {
 fn main() {
     let config_path = Config::default_config_path();
     let settings = Config::load(&config_path);
+
+    if !ffmpeg_available() {
+        rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Warning)
+            .set_title("FFmpeg not found")
+            .set_description(missing_ffmpeg_message())
+            .set_buttons(rfd::MessageButtons::Ok)
+            .show();
+    }
 
     let event_loop = EventLoop::new().expect("failed to create event loop");
     event_loop.set_control_flow(ControlFlow::Poll);

@@ -7,6 +7,7 @@ use infant_hand_motion_viewer::util::WorkerQueue;
 use infant_hand_motion_viewer::video::cache::{
     CACHE_DIR_NAME, default_location, format_size, is_video_hash, video_hash_from_export_path,
 };
+use infant_hand_motion_viewer::video::decoder::ffmpeg_available;
 use infant_hand_motion_viewer::video::loader::load_remote_video;
 use infant_hand_motion_viewer::video::{LoadStatus, VideoCache};
 
@@ -109,6 +110,9 @@ fn wait_for_status(store: &infant_hand_motion_viewer::video::FrameStore, done: i
 
 #[test]
 fn a_cached_video_loads_without_the_remote() {
+    if !ffmpeg_available() {
+        return;
+    }
     let dir = TempDir::new("video_cache_load");
     let cache = VideoCache::new(dir.path());
     cache
@@ -123,6 +127,9 @@ fn a_cached_video_loads_without_the_remote() {
 
 #[test]
 fn an_unreadable_cache_entry_is_dropped() {
+    if !ffmpeg_available() {
+        return;
+    }
     let dir = TempDir::new("video_cache_corrupt");
     let cache = VideoCache::new(dir.path());
     cache.store(HASH, b"garbage").unwrap();
