@@ -6,11 +6,12 @@ Communicates via standard input/output with the remote desktop viewer.
 Protocol:
 - Requests arrive as JSON lines on stdin: {"id": <int>, "cmd": "<command>", ...}
 - Text responses are written as JSON lines on stdout: {"id": <int>, "status": "ok"|"error", ...}\n
-- Binary responses (get_file, bundle_frames, get_frame) write a JSON header line:
+- Binary responses (get_file, get_video, bundle_frames, get_frame) write a JSON header line:
     {"id": <int>, "status": "ok", "size": <byte_length>, ...}\n
   followed immediately by exactly <byte_length> raw bytes.
 """
 
+import hashlib
 import io
 import json
 import os
@@ -301,6 +302,105 @@ def handle_get_file(req, out):
         write_json_line(out, {"id": req["id"], "status": "error", "message": str(e)})
 
 
+def sha256_file(path: Path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+_video_hash_cache = {}
+
+
+def search_video_by_hash(video_hash: str, roots):
+    """Last resort: hash every mp4 under `roots` until one matches; results (including misses) are remembered."""
+    key = (video_hash, tuple(str(r) for r in roots))
+    if key in _video_hash_cache:
+        return _video_hash_cache[key]
+    found = None
+    for root in roots:
+        for dirpath, _, names in os.walk(root):
+            for name in names:
+                if not name.lower().endswith(".mp4"):
+                    continue
+                candidate = Path(dirpath) / name
+                try:
+                    if candidate.exists() and sha256_file(candidate) == video_hash:
+                        found = candidate
+                        break
+                except OSError:
+                    continue
+            if found:
+                break
+        if found:
+            break
+    _video_hash_cache[key] = found
+    return found
+
+
+def find_video(export_path_str: str):
+    """
+    Locate the source mp4 for an export file via the frames directory's .meta.json (`source_video`).
+    Falls back to searching next to that path for an mp4 whose SHA-256 matches the hash in the frames key.
+    Returns (path, video_hash) or None.
+    """
+    frames_dir = find_frames_dir(export_path_str)
+    if not frames_dir:
+        return None
+    video_hash = frames_dir.name.split("__")[0]
+    source = None
+    try:
+        with open(frames_dir / ".meta.json", encoding="utf-8") as f:
+            meta = json.load(f)
+        video_hash = meta.get("video_hash") or video_hash
+        source = meta.get("source_video")
+    except (OSError, ValueError):
+        pass
+    if source:
+        candidate = Path(os.path.expanduser(source))
+        if candidate.exists():
+            return candidate, video_hash
+    if len(video_hash) != 64:
+        return None
+    roots = []
+    if source:
+        parent = Path(os.path.expanduser(source)).parent
+        roots += [p for p in (parent, parent.parent) if p.is_dir()]
+    found = search_video_by_hash(video_hash, roots)
+    return (found, video_hash) if found else None
+
+
+def handle_get_video(req, out):
+    export_path_str = req.get("path") or req.get("export_path", "")
+    found = find_video(export_path_str)
+    if not found:
+        write_json_line(out, {"id": req["id"], "status": "not_found"})
+        return
+    video, video_hash = found
+    try:
+        resolved = video.resolve()
+        size = resolved.stat().st_size
+        write_json_line(out, {
+            "id": req["id"],
+            "status": "ok",
+            "size": size,
+            "filename": video.name,
+            "video_hash": video_hash,
+        })
+        with open(resolved, "rb") as f:
+            remaining = size
+            while remaining > 0:
+                chunk = f.read(min(1 << 20, remaining))
+                if not chunk:
+                    break
+                out.write(chunk)
+                remaining -= len(chunk)
+        out.flush()
+    except Exception as e:
+        write_json_line(out, {"id": req["id"], "status": "error", "message": str(e)})
+
+
 def handle_get_frame(req, out):
     export_path_str = req.get("path") or req.get("export_path", "")
     frame_number = req.get("frame") if "frame" in req else req.get("frame_number", 1)
@@ -404,6 +504,8 @@ def main():
                 write_json_line(stdout, res)
             elif cmd == "get_file":
                 handle_get_file(req, stdout)
+            elif cmd == "get_video":
+                handle_get_video(req, stdout)
             elif cmd == "get_frame":
                 handle_get_frame(req, stdout)
             elif cmd == "bundle_frames":

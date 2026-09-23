@@ -94,6 +94,14 @@ pub struct ExplorerNode {
     pub default_open: bool,
 }
 
+/// A trial's source video as downloaded from the remote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteVideo {
+    pub filename: String,
+    pub video_hash: String,
+    pub bytes: Vec<u8>,
+}
+
 struct ChildSession {
     child: Child,
     stdin: ChildStdin,
@@ -489,6 +497,38 @@ impl RemoteClient {
             return Err(msg.to_string());
         }
         Ok(data)
+    }
+
+    /// Fetch the source video of an export in one request. `Ok(None)` means the remote cannot find it.
+    pub fn fetch_video(&self, remote_export_path: &str) -> Result<Option<RemoteVideo>, String> {
+        let (hdr, bytes) = {
+            let mut lock = self.session.lock().unwrap();
+            let session = lock.as_mut().ok_or_else(|| "Not connected".to_string())?;
+            let req_id = session.next_id;
+            session.next_id += 1;
+
+            let req = serde_json::json!({
+                "id": req_id,
+                "cmd": "get_video",
+                "path": remote_export_path,
+            });
+            Self::send_command_binary(session, &req)?
+        };
+
+        let text = |key: &str| hdr.get(key).and_then(|s| s.as_str()).unwrap_or_default().to_string();
+        match hdr.get("status").and_then(|s| s.as_str()) {
+            Some("ok") => Ok(Some(RemoteVideo {
+                filename: text("filename"),
+                video_hash: text("video_hash"),
+                bytes,
+            })),
+            Some("not_found") => Ok(None),
+            _ => Err(hdr
+                .get("message")
+                .and_then(|s| s.as_str())
+                .unwrap_or("Failed to fetch remote video")
+                .to_string()),
+        }
     }
 
     /// Fetch one frame image into memory. `Ok(None)` means the remote has no such frame.
