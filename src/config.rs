@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::video::{self, VideoCache};
+
 fn default_playback_speed() -> f32 {
     1.0
 }
@@ -96,6 +98,12 @@ pub struct Config {
     pub remote_data_folder: String,
 
     #[serde(default)]
+    pub video_cache_enabled: bool,
+    /// Directory the video cache folder is created in; `None` means the OS temp directory.
+    #[serde(default)]
+    pub video_cache_location: Option<String>,
+
+    #[serde(default)]
     pub window_x: Option<i32>,
     #[serde(default)]
     pub window_y: Option<i32>,
@@ -144,6 +152,8 @@ impl Default for Config {
             remote_port: default_remote_port(),
             remote_python: default_remote_python(),
             remote_data_folder: String::new(),
+            video_cache_enabled: false,
+            video_cache_location: None,
             window_x: None,
             window_y: None,
             window_width: default_window_width(),
@@ -214,6 +224,14 @@ impl Config {
             self.remote_python = defaults.remote_python;
         }
 
+        if self
+            .video_cache_location
+            .as_deref()
+            .is_some_and(|l| l.trim().is_empty())
+        {
+            self.video_cache_location = None;
+        }
+
         if !self.remote_host.is_empty() && !crate::remote::is_valid_ssh_host(&self.remote_host) {
             self.remote_host.clear();
             self.remote_mode = false;
@@ -241,6 +259,19 @@ impl Config {
         };
         for component in &mut self.camera_target {
             *component = finite_or(*component, 0.0);
+        }
+    }
+
+    /// The video cache to use, or `None` while caching is off.
+    pub fn video_cache(&self) -> Option<VideoCache> {
+        self.video_cache_enabled.then(|| self.video_cache_dir())
+    }
+
+    /// The video cache at the configured location, whether or not caching is on.
+    pub fn video_cache_dir(&self) -> VideoCache {
+        match self.video_cache_location.as_deref() {
+            Some(location) => VideoCache::new(Path::new(location)),
+            None => VideoCache::new(&video::cache::default_location()),
         }
     }
 

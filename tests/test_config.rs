@@ -45,6 +45,9 @@ fn test_config_defaults() {
     assert_eq!(cfg.window_width, 1024);
     assert_eq!(cfg.window_height, 720);
     assert!(cfg.window_fullscreen);
+    assert!(!cfg.video_cache_enabled);
+    assert_eq!(cfg.video_cache_location, None);
+    assert!(cfg.video_cache().is_none());
 }
 
 #[test]
@@ -196,4 +199,36 @@ fn test_config_msaa_samples_defaults_and_validates() {
         fs::write(&path, format!(r#"{{"msaa_samples": {written}}}"#)).unwrap();
         assert_eq!(Config::load(&path).msaa_samples, expected, "written {written}");
     }
+}
+
+#[test]
+fn test_video_cache_settings_roundtrip_and_resolve() {
+    let temp_dir = TempDirGuard::new("test_config_video_cache");
+    let config_path = temp_dir.path().join("config.json");
+
+    let cfg = Config {
+        video_cache_enabled: true,
+        video_cache_location: Some(temp_dir.path().to_string_lossy().into_owned()),
+        ..Default::default()
+    };
+    cfg.save(&config_path).unwrap();
+
+    let loaded = Config::load(&config_path);
+    assert!(loaded.video_cache_enabled);
+    let cache = loaded.video_cache().expect("cache should be on");
+    assert_eq!(cache.dir(), temp_dir.path().join("infant-hand-motion-cache"));
+}
+
+#[test]
+fn test_video_cache_defaults_to_the_temp_dir_and_is_off_when_disabled() {
+    let mut cfg = Config::default();
+    assert_eq!(
+        cfg.video_cache_dir().dir(),
+        std::env::temp_dir().join("infant-hand-motion-cache")
+    );
+    cfg.video_cache_location = Some("   ".to_string());
+    cfg.sanitize();
+    assert_eq!(cfg.video_cache_location, None);
+    cfg.video_cache_location = Some("elsewhere".to_string());
+    assert!(cfg.video_cache().is_none());
 }

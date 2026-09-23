@@ -812,7 +812,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             state.video = Some(load_remote_video(
                 state.remote_client.clone(),
                 state.current_remote_path.clone(),
-                None,
+                state.settings.video_cache(),
                 &state.video_worker,
             ));
         }
