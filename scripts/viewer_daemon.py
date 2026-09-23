@@ -6,20 +6,18 @@ Communicates via standard input/output with the remote desktop viewer.
 Protocol:
 - Requests arrive as JSON lines on stdin: {"id": <int>, "cmd": "<command>", ...}
 - Text responses are written as JSON lines on stdout: {"id": <int>, "status": "ok"|"error", ...}\n
-- Binary responses (get_file, get_video, bundle_frames, get_frame) write a JSON header line:
+- Binary responses (get_file, get_video) write a JSON header line:
     {"id": <int>, "status": "ok", "size": <byte_length>, ...}\n
   followed immediately by exactly <byte_length> raw bytes.
 """
 
 import hashlib
-import io
 import json
 import os
 import re
 import struct
 import sys
 import traceback
-import zipfile
 import zlib
 from pathlib import Path
 
@@ -234,50 +232,6 @@ def find_frames_dir(export_path_str: str):
     return None
 
 
-FRAME_FILE_RE = re.compile(r"^frame_(\d+)\.(jpg|jpeg|png)$", re.IGNORECASE)
-FRAME_EXT_PRIORITY = {"jpg": 0, "jpeg": 1, "png": 2}
-_frame_index_cache = {}
-
-
-def scan_frame_files(frames_dir: Path):
-    """Map frame number -> image path for every non-empty frame_<n>.<jpg|jpeg|png>, ignoring zero padding."""
-    found = {}
-    with os.scandir(frames_dir) as entries:
-        for entry in entries:
-            m = FRAME_FILE_RE.match(entry.name)
-            if not m or not entry.is_file():
-                continue
-            try:
-                if entry.stat().st_size == 0:
-                    continue
-            except OSError:
-                continue
-            number = int(m.group(1))
-            rank = FRAME_EXT_PRIORITY[m.group(2).lower()]
-            if number not in found or rank < found[number][0]:
-                found[number] = (rank, Path(entry.path))
-    return {number: path for number, (_, path) in found.items()}
-
-
-def frame_files(frames_dir: Path, force_rescan: bool = False):
-    """Frame index for a directory, rebuilt when the directory changes (or when forced)."""
-    key = str(frames_dir)
-    mtime = os.stat(frames_dir).st_mtime_ns
-    cached = _frame_index_cache.get(key)
-    if force_rescan or cached is None or cached[0] != mtime:
-        cached = (mtime, scan_frame_files(frames_dir))
-        _frame_index_cache[key] = cached
-    return cached[1]
-
-
-def find_frame_file(frames_dir: Path, frame_number: int):
-    """Path of one frame image, rescanning once if the cached index does not have it yet."""
-    files = frame_files(frames_dir)
-    if frame_number not in files:
-        files = frame_files(frames_dir, force_rescan=True)
-    return files.get(frame_number)
-
-
 def handle_scan_tree(req):
     root = req.get("root", "")
     tree = scan_tree(root)
@@ -401,73 +355,6 @@ def handle_get_video(req, out):
         write_json_line(out, {"id": req["id"], "status": "error", "message": str(e)})
 
 
-def handle_get_frame(req, out):
-    export_path_str = req.get("path") or req.get("export_path", "")
-    frame_number = req.get("frame") if "frame" in req else req.get("frame_number", 1)
-
-    frames_dir = find_frames_dir(export_path_str)
-    if not frames_dir:
-        write_json_line(out, {"id": req["id"], "status": "not_found"})
-        return
-
-    try:
-        candidate = find_frame_file(frames_dir, int(frame_number))
-        if candidate is None:
-            write_json_line(out, {"id": req["id"], "status": "not_found"})
-            return
-        with open(candidate.resolve(), "rb") as f:
-            data = f.read()
-        write_json_line(out, {
-            "id": req["id"],
-            "status": "ok",
-            "size": len(data),
-            "filename": candidate.name
-        })
-        out.write(data)
-        out.flush()
-    except Exception as e:
-        write_json_line(out, {"id": req["id"], "status": "error", "message": str(e)})
-
-
-def handle_bundle_frames(req, out):
-    export_path_str = req.get("path") or req.get("export_path", "")
-    frames_dir = find_frames_dir(export_path_str)
-
-    if not frames_dir:
-        write_json_line(out, {"id": req["id"], "status": "ok", "size": 0, "frame_count": 0})
-        return
-
-    try:
-        files = frame_files(frames_dir)
-        start_frame = req.get("start_frame") or 0
-        count = req.get("count", 0)
-
-        selected = [(n, files[n]) for n in sorted(files) if n >= start_frame]
-        if count and count > 0:
-            selected = selected[:count]
-        selected_files = [p for _, p in selected]
-
-        # Pack into an uncompressed ZIP archive (JPEGs are already compressed)
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_STORED) as zf:
-            for p in selected_files:
-                resolved = p.resolve()
-                if resolved.exists():
-                    zf.write(resolved, arcname=p.name)
-
-        zip_bytes = buf.getvalue()
-        write_json_line(out, {
-            "id": req["id"],
-            "status": "ok",
-            "size": len(zip_bytes),
-            "frame_count": len(selected_files)
-        })
-        out.write(zip_bytes)
-        out.flush()
-    except Exception as e:
-        write_json_line(out, {"id": req["id"], "status": "error", "message": str(e)})
-
-
 def write_json_line(out, obj):
     line = json.dumps(obj) + "\n"
     out.write(line.encode("utf-8"))
@@ -506,10 +393,6 @@ def main():
                 handle_get_file(req, stdout)
             elif cmd == "get_video":
                 handle_get_video(req, stdout)
-            elif cmd == "get_frame":
-                handle_get_frame(req, stdout)
-            elif cmd == "bundle_frames":
-                handle_bundle_frames(req, stdout)
             elif cmd == "quit" or cmd == "exit":
                 write_json_line(stdout, {"id": req_id, "status": "ok"})
                 break

@@ -8,7 +8,7 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use infant_hand_motion_viewer::remote::{ConnectionState, FrameStream, RemoteClient, RemoteConfig};
+use infant_hand_motion_viewer::remote::{ConnectionState, RemoteClient, RemoteConfig};
 use infant_hand_motion_viewer::util::WorkerQueue;
 
 struct TempDirGuard(PathBuf);
@@ -33,6 +33,12 @@ impl Drop for TempDirGuard {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
     }
+}
+
+fn workspace_video(workspace: &TempDirGuard, bytes: &[u8]) -> PathBuf {
+    let path = workspace.path().join("trial.mp4");
+    fs::write(&path, bytes).unwrap();
+    path
 }
 
 #[test]
@@ -69,9 +75,6 @@ fn test_remote_client_local_daemon_e2e() {
     let hexport_path = trial_dir.join("motion__30fps__hash.hexport");
     let synthetic_bytes = common::generate_synthetic_hexport("subject_a", "trial_01");
     fs::write(&hexport_path, &synthetic_bytes).unwrap();
-
-    let frame_bytes = b"sample_jpeg_frame_data";
-    fs::write(frames_dir.join("frame_00001.jpg"), frame_bytes).unwrap();
 
     let client = RemoteClient::new();
     let config = RemoteConfig {
@@ -112,126 +115,27 @@ fn test_remote_client_local_daemon_e2e() {
     assert_eq!(downloaded_bytes, synthetic_bytes);
     assert!(client.fetch_file_bytes("/definitely/not/a/file.hexport").is_err());
 
-    // Frame files match by number whatever their zero padding; other names are ignored
-    fs::write(frames_dir.join("frame_2.jpg"), b"frame two").unwrap();
-    fs::write(frames_dir.join("frame_0003.png"), b"frame three").unwrap();
-    fs::write(frames_dir.join("00004.jpg"), b"bare number").unwrap();
-    fs::write(frames_dir.join("frame_5.jpg"), b"").unwrap();
-    assert_eq!(
-        client
-            .fetch_frame_bytes(&hexport_path.to_string_lossy(), 2)
-            .unwrap()
-            .unwrap(),
-        b"frame two"
-    );
-    assert_eq!(
-        client
-            .fetch_frame_bytes(&hexport_path.to_string_lossy(), 3)
-            .unwrap()
-            .unwrap(),
-        b"frame three"
-    );
-    assert_eq!(
-        client.fetch_frame_bytes(&hexport_path.to_string_lossy(), 4).unwrap(),
-        None
-    );
-    assert_eq!(
-        client.fetch_frame_bytes(&hexport_path.to_string_lossy(), 5).unwrap(),
-        None
-    );
-    let bundled: Vec<u32> = client
-        .fetch_frame_bundle_bytes(&hexport_path.to_string_lossy(), 2, 10)
+    // Test fetch_video: the video is located through the frames directory's .meta.json
+    let video_bytes = b"not really an mp4".to_vec();
+    let video_path = workspace_video(&temp_workspace, &video_bytes);
+    fs::write(
+        frames_dir.join(".meta.json"),
+        serde_json::json!({ "video_hash": "hash", "source_video": video_path.to_string_lossy() }).to_string(),
+    )
+    .unwrap();
+    let video = client
+        .fetch_video(&hexport_path.to_string_lossy())
         .unwrap()
-        .into_iter()
-        .map(|(n, _)| n)
-        .collect();
-    assert_eq!(bundled, vec![2, 3]);
-
-    // Test in-memory frame fetches
-    let export_str = hexport_path.to_string_lossy().into_owned();
-    assert_eq!(
-        client.fetch_frame_bytes(&export_str, 1).unwrap().as_deref(),
-        Some(&frame_bytes[..])
-    );
-    assert_eq!(client.fetch_frame_bytes(&export_str, 99).unwrap(), None);
-    assert_eq!(
-        client.fetch_frame_bundle_bytes(&export_str, 1, 1).unwrap(),
-        vec![(1u32, frame_bytes.to_vec())]
-    );
-
-    // Test frame stream
-    let stream = FrameStream::new(client.clone());
-    stream.set_focus(&export_str, 1);
-    let mut fetched = None;
-    for _ in 0..100 {
-        fetched = stream.get(1);
-        if fetched.is_some() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    assert_eq!(
-        fetched.expect("frame stream never delivered frame 1").as_slice(),
-        frame_bytes
-    );
+        .expect("video should be found");
+    assert_eq!(video.bytes, video_bytes);
+    assert_eq!(video.filename, "trial.mp4");
+    assert_eq!(video.video_hash, "hash");
+    fs::remove_file(&video_path).unwrap();
+    assert_eq!(client.fetch_video(&hexport_path.to_string_lossy()).unwrap(), None);
+    assert_eq!(client.fetch_video("/definitely/not/a/file.hexport").unwrap(), None);
 
     // Test disconnect
     client.disconnect();
     assert_eq!(client.state(), ConnectionState::Disconnected);
     assert!(!client.is_connected());
-}
-
-#[test]
-fn test_frame_stream_switches_to_a_new_sequence_while_prefetching() {
-    let workspace = TempDirGuard::new("test_stream_switch");
-    let dataset_dir = workspace.path().join("dataset");
-    let mut exports = Vec::new();
-    for name in ["a", "b"] {
-        let trial_dir = dataset_dir.join(format!("subject_{name}")).join("trial");
-        let frames_dir = trial_dir.join("frames").join(format!("{name}__30fps"));
-        fs::create_dir_all(&frames_dir).unwrap();
-        let export = trial_dir.join(format!("{name}__30fps__hash.hexport"));
-        fs::write(&export, common::generate_synthetic_hexport("subject", "trial")).unwrap();
-        for frame in 1..=40u32 {
-            fs::write(
-                frames_dir.join(format!("frame_{frame:05}.jpg")),
-                format!("{name}-{frame}"),
-            )
-            .unwrap();
-        }
-        exports.push(export.to_string_lossy().into_owned());
-    }
-
-    let client = RemoteClient::new();
-    client
-        .connect_sync(&RemoteConfig {
-            host: "localhost".to_string(),
-            port: 22,
-            python_bin: "python3".to_string(),
-            root_folder: dataset_dir.to_string_lossy().into_owned(),
-        })
-        .expect("Failed to connect to local test daemon");
-
-    let stream = FrameStream::new(client.clone());
-    let wait_for = |frame: u32| {
-        for _ in 0..200 {
-            if let Some(bytes) = stream.get(frame) {
-                return Some(bytes);
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        None
-    };
-
-    stream.set_sequence(&exports[0], (1..=40).collect());
-    stream.set_focus(&exports[0], 5);
-    assert_eq!(wait_for(5).expect("frame 5 of a").as_slice(), b"a-5");
-    // Let the prefetch window fill so a request is likely in flight when the switch happens.
-    std::thread::sleep(Duration::from_millis(30));
-
-    stream.set_sequence(&exports[1], (1..=40).collect());
-    stream.set_focus(&exports[1], 1);
-    assert_eq!(wait_for(1).expect("frame 1 of b").as_slice(), b"b-1");
-    stream.set_focus(&exports[1], 2);
-    assert_eq!(wait_for(2).expect("frame 2 of b").as_slice(), b"b-2");
 }
