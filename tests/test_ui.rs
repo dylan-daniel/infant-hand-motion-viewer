@@ -118,12 +118,15 @@ fn test_menu_state_and_result() {
     assert!(!state.remote_connected);
     assert!(state.open_file.is_empty());
     assert!(!state.hand_translucent);
+    assert!(!state.video_cache_enabled);
     assert!(!state.show_camera_marker);
 
     let result = MenuResult::default();
     assert!(!result.export_file_requested);
     assert!(!result.open_remote_modal_requested);
     assert!(!result.disconnect_remote_requested);
+    assert!(!result.clear_video_cache_requested);
+    assert!(!result.choose_video_cache_location_requested);
     assert!(!result.exit_requested);
 }
 

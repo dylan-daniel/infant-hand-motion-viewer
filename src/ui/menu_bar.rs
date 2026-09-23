@@ -1,5 +1,7 @@
 use dear_imgui_rs::{StyleColor, Ui, sys};
 
+use crate::video::cache::format_size;
+
 /// Toggle state for the top menu bar items.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MenuState {
@@ -12,6 +14,10 @@ pub struct MenuState {
     pub msaa_samples: u32,
     pub msaa_options: Vec<u32>,
     pub open_file: String,
+    pub video_cache_enabled: bool,
+    /// Directory the cache folder goes in; empty means the OS temp directory.
+    pub video_cache_location: String,
+    pub video_cache_size: u64,
     pub remote_connected: bool,
 }
 
@@ -21,6 +27,8 @@ pub struct MenuResult {
     pub state: MenuState,
     pub export_file_requested: bool,
     pub open_remote_modal_requested: bool,
+    pub choose_video_cache_location_requested: bool,
+    pub clear_video_cache_requested: bool,
     pub disconnect_remote_requested: bool,
     pub exit_requested: bool,
 }
@@ -31,6 +39,8 @@ pub fn draw_menu_bar(ui: &Ui, mut state: MenuState) -> MenuResult {
         state: state.clone(),
         export_file_requested: false,
         open_remote_modal_requested: false,
+        choose_video_cache_location_requested: false,
+        clear_video_cache_requested: false,
         disconnect_remote_requested: false,
         exit_requested: false,
     };
@@ -88,6 +98,31 @@ pub fn draw_menu_bar(ui: &Ui, mut state: MenuState) -> MenuResult {
                     );
                 });
             }
+            ui.menu("Video Cache", || {
+                ui.checkbox("Cache Videos on Disk", &mut state.video_cache_enabled);
+                if ui.is_item_hovered() {
+                    crate::ui::padded_tooltip(ui, || {
+                        ui.text(
+                            "Keeps downloaded trial videos so reopening a trial skips the download.\n\
+                             Only videos are cached, never hand exports. Off by default.",
+                        );
+                    });
+                }
+                ui.input_text("Location", &mut state.video_cache_location)
+                    .hint("OS temp folder")
+                    .build();
+                if ui.button("Browse...") {
+                    result.choose_video_cache_location_requested = true;
+                }
+                ui.same_line();
+                if ui.button("Use Default") {
+                    state.video_cache_location.clear();
+                }
+                ui.text_disabled(format!("Cached: {}", format_size(state.video_cache_size)));
+                if ui.button("Clear Cache") {
+                    result.clear_video_cache_requested = true;
+                }
+            });
             ui.separator();
             let options = state.msaa_options.clone();
             ui.menu("Anti-Aliasing", || {

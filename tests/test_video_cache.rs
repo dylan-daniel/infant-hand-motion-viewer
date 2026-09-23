@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use infant_hand_motion_viewer::remote::RemoteClient;
 use infant_hand_motion_viewer::util::WorkerQueue;
 use infant_hand_motion_viewer::video::cache::{
-    CACHE_DIR_NAME, default_location, is_video_hash, video_hash_from_export_path,
+    CACHE_DIR_NAME, default_location, format_size, is_video_hash, video_hash_from_export_path,
 };
 use infant_hand_motion_viewer::video::loader::load_remote_video;
 use infant_hand_motion_viewer::video::{LoadStatus, VideoCache};
@@ -138,4 +138,13 @@ fn without_a_cache_or_connection_loading_fails_clearly() {
     let worker = WorkerQueue::new();
     let store = load_remote_video(RemoteClient::new(), "/x/a.hexport".to_string(), None, &worker);
     wait_for_status(&store, |s| matches!(s, LoadStatus::Failed(_)));
+}
+
+#[test]
+fn sizes_are_formatted_for_people() {
+    assert_eq!(format_size(0), "0 B");
+    assert_eq!(format_size(1023), "1023 B");
+    assert_eq!(format_size(1536), "1.5 KB");
+    assert_eq!(format_size(5 << 20), "5.0 MB");
+    assert_eq!(format_size(3 << 30), "3.0 GB");
 }
