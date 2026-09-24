@@ -12,10 +12,15 @@ Infant Hand Motion Viewer: a Rust desktop app (wgpu + Dear ImGui) for browsing i
 - `src/data/`: hexport loading, MANO model, mesh sequences, camera projection math
 - `src/graphics/`: wgpu renderer, cameras, framebuffers, image textures, hand overlay, WGSL shaders
 - `src/ui/`: ImGui panes (explorer, viewport, image view, transport, menus, modals)
-- `src/remote/`: SSH remote client and frame streaming
+- `src/remote/`: SSH remote client
+- `src/video/`: remote trial video download, decoding through the `ffmpeg` command-line tool into an in-memory frame store, optional on-disk video cache
 - `src/util/`: worker queue, window placement
 - `scripts/viewer_daemon.py`: remote-side daemon the Rust remote client talks to; keep both sides in sync
 - `tests/`: integration tests
+
+## Runtime requirements
+
+Remote frames come from the trial's mp4, decoded by running the `ffmpeg` and `ffprobe` command-line tools, which must be on `PATH` (or in `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`). The app is not linked against FFmpeg and ships none of it; at startup it shows a native warning box if the tools are missing. Install with `winget install Gyan.FFmpeg`, `brew install ffmpeg` or the distribution's `ffmpeg` package.
 
 ## Commands
 
