@@ -330,7 +330,7 @@ DEBUG_VIDEO_PREFIX = {"wilor": "5a", "sam3": "5b"}
 
 
 def debug_video_path(kind: str, source: Path):
-    subject, trial = source.parent.name, source.stem
+    subject, trial = source.parent.name, "_".join(source.stem.split("_")[-2:])
     if kind == "wilor":
         return DEBUG_VIDEO_ROOT / "wilor_hamer_compare" / subject / trial / f"{subject}_{trial}_wilor.mp4"
     return DEBUG_VIDEO_ROOT / "sam3_render" / subject / f"{trial}.mp4"
