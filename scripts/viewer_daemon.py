@@ -325,6 +325,17 @@ def find_video(export_path_str: str):
     return (found, video_hash) if found else None
 
 
+DEBUG_VIDEO_ROOT = Path("/HDD16TB/infant_grasp_workspace_outputs")
+DEBUG_VIDEO_PREFIX = {"wilor": "5a", "sam3": "5b"}
+
+
+def debug_video_path(kind: str, source: Path):
+    subject, trial = source.parent.name, source.stem
+    if kind == "wilor":
+        return DEBUG_VIDEO_ROOT / "wilor_hamer_compare" / subject / trial / f"{subject}_{trial}_wilor.mp4"
+    return DEBUG_VIDEO_ROOT / "sam3_render" / subject / f"{trial}.mp4"
+
+
 def handle_get_video(req, out):
     export_path_str = req.get("path") or req.get("export_path", "")
     found = find_video(export_path_str)
@@ -332,6 +343,13 @@ def handle_get_video(req, out):
         write_json_line(out, {"id": req["id"], "status": "not_found"})
         return
     video, video_hash = found
+    kind = req.get("kind")
+    if kind in DEBUG_VIDEO_PREFIX:
+        video = debug_video_path(kind, video)
+        if not video.exists():
+            write_json_line(out, {"id": req["id"], "status": "not_found"})
+            return
+        video_hash = DEBUG_VIDEO_PREFIX[kind] + video_hash[2:]
     try:
         resolved = video.resolve()
         size = resolved.stat().st_size

@@ -500,7 +500,7 @@ impl RemoteClient {
     }
 
     /// Fetch the source video of an export in one request. `Ok(None)` means the remote cannot find it.
-    pub fn fetch_video(&self, remote_export_path: &str) -> Result<Option<RemoteVideo>, String> {
+    pub fn fetch_video(&self, remote_export_path: &str, kind: Option<&str>) -> Result<Option<RemoteVideo>, String> {
         let (hdr, bytes) = {
             let mut lock = self.session.lock().unwrap();
             let session = lock.as_mut().ok_or_else(|| "Not connected".to_string())?;
@@ -511,6 +511,7 @@ impl RemoteClient {
                 "id": req_id,
                 "cmd": "get_video",
                 "path": remote_export_path,
+                "kind": kind,
             });
             Self::send_command_binary(session, &req)?
         };

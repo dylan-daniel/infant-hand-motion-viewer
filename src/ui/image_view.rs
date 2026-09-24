@@ -8,6 +8,7 @@ pub struct ImageViewResult {
     pub hovered: bool,
     pub focused: bool,
     pub transport: TransportState,
+    pub dock_id: Id,
 }
 
 /// Draw the 2D modeled camera frame image viewport window.
@@ -31,6 +32,7 @@ pub fn draw_image_window(
             scrubbing: false,
             speed: transport.speed,
         },
+        dock_id: Id::from(0),
     };
 
     if let Some(did) = dock_id {
@@ -43,6 +45,7 @@ pub fn draw_image_window(
 
     window.build(|| {
         result.focused = ui.is_window_focused();
+        result.dock_id = ui.get_window_dock_id();
 
         let avail = ui.content_region_avail();
         let region_width = avail[0].max(1.0);

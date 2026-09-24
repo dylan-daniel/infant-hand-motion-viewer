@@ -7,6 +7,15 @@ use crate::remote::RemoteClient;
 use crate::util::WorkerQueue;
 
 use super::cache::{VideoCache, is_video_hash, video_hash_from_export_path};
+
+/// Debug: the hash a `kind` video is cached under, mirroring the daemon's rewrite of the source video hash.
+fn kind_hash(hash: String, kind: Option<&str>) -> String {
+    match kind {
+        Some("wilor") => format!("5a{}", &hash[2..]),
+        Some("sam3") => format!("5b{}", &hash[2..]),
+        _ => hash,
+    }
+}
 use super::decoder::{decode_into, ffmpeg_available, missing_ffmpeg_message};
 use super::frame_store::{FrameStore, LoadStatus};
 
@@ -37,6 +46,7 @@ fn decode_cached(cache: &VideoCache, hash: &str, path: &Path, store: &FrameStore
 pub fn load_remote_video(
     client: RemoteClient,
     remote_path: String,
+    kind: Option<&'static str>,
     cache: Option<VideoCache>,
     worker: &WorkerQueue,
 ) -> Arc<FrameStore> {
@@ -49,13 +59,15 @@ pub fn load_remote_video(
         if !ffmpeg_available() {
             return job_store.set_status(LoadStatus::Failed(missing_ffmpeg_message()));
         }
-        if let (Some(cache), Some(hash)) = (&cache, video_hash_from_export_path(&remote_path))
-            && let Some(path) = cache.get(&hash)
+        if let (Some(cache), Some(hash)) = (
+            &cache,
+            video_hash_from_export_path(&remote_path).map(|hash| kind_hash(hash, kind)),
+        ) && let Some(path) = cache.get(&hash)
             && decode_cached(cache, &hash, &path, &job_store)
         {
             return;
         }
-        let video = match client.fetch_video(&remote_path) {
+        let video = match client.fetch_video(&remote_path, kind) {
             Ok(Some(video)) => video,
             Ok(None) => return job_store.set_status(LoadStatus::Missing),
             Err(err) => return job_store.set_status(LoadStatus::Failed(err)),

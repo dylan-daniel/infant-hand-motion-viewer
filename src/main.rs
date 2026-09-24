@@ -138,6 +138,7 @@ struct AppState {
     remote_open_worker: Arc<WorkerQueue>,
     pending_remote_open: Arc<Mutex<Option<PendingOpen>>>,
     video: Option<Arc<FrameStore>>,
+    extra_views: [ExtraView; 2],
     video_worker: WorkerQueue,
     streamed_frame: Option<u32>,
     current_remote_path: String,
@@ -496,6 +497,10 @@ impl ApplicationHandler for AppRunner {
             remote_open_worker,
             pending_remote_open: Arc::new(Mutex::new(None)),
             video: None,
+            extra_views: [
+                ExtraView::new("wilor", "WiLoR View"),
+                ExtraView::new("sam3", "SAM3 View"),
+            ],
             video_worker: WorkerQueue::new(),
             streamed_frame: None,
             current_remote_path: String::new(),
@@ -832,14 +837,27 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         if let Some(video) = state.video.take() {
             video.cancel();
         }
+        for view in &mut state.extra_views {
+            view.reset();
+        }
         state.streamed_frame = None;
         if !state.current_remote_path.is_empty() && state.sequence.is_some() {
             state.video = Some(load_remote_video(
                 state.remote_client.clone(),
                 state.current_remote_path.clone(),
+                None,
                 state.settings.video_cache(),
                 &state.video_worker,
             ));
+            for view in &mut state.extra_views {
+                view.video = Some(load_remote_video(
+                    state.remote_client.clone(),
+                    state.current_remote_path.clone(),
+                    Some(view.kind),
+                    state.settings.video_cache(),
+                    &state.video_worker,
+                ));
+            }
         }
     }
 
@@ -965,6 +983,15 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
                 state.frame_image.load_rgb(&state.gpu, &key, frame);
                 state.streamed_frame = Some(f_num);
             }
+        }
+    }
+
+    if let Some(seq) = &state.sequence
+        && let Some(f_num) = seq.frame_number(state.current_frame)
+        && f_num > 0
+    {
+        for view in &mut state.extra_views {
+            view.sync(&state.gpu, &mut state.imgui_renderer, f_num as u32);
         }
     }
 
@@ -1112,6 +1139,19 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             &state.icons,
             None,
         );
+
+        for view in &state.extra_views {
+            draw_image_window(
+                ui,
+                &format!("{}###{}", view.title, view.title),
+                view.texture_id,
+                view.image.width(),
+                view.image.height(),
+                &image_transport,
+                &state.icons,
+                Some(i_res.dock_id),
+            );
+        }
 
         draw_flags_window(ui, "Flags###Flags", &mut state.settings.flag_layers_enabled, None);
 
@@ -1354,6 +1394,66 @@ struct OverlayKey {
     image_generation: u64,
     image_version: u64,
     sample_count: u32,
+}
+
+/// Debug: an extra tab beside Frame View showing a pre-rendered video of the trial.
+struct ExtraView {
+    kind: &'static str,
+    title: &'static str,
+    video: Option<Arc<FrameStore>>,
+    image: ImageTexture,
+    texture: Option<ExternalTextureId>,
+    texture_id: Option<TextureId>,
+    generation: u64,
+    shown_frame: Option<u32>,
+}
+
+impl ExtraView {
+    fn new(kind: &'static str, title: &'static str) -> Self {
+        Self {
+            kind,
+            title,
+            video: None,
+            image: ImageTexture::new(),
+            texture: None,
+            texture_id: None,
+            generation: 0,
+            shown_frame: None,
+        }
+    }
+
+    fn reset(&mut self) {
+        if let Some(video) = self.video.take() {
+            video.cancel();
+        }
+        self.image.clear();
+        self.shown_frame = None;
+    }
+
+    fn sync(&mut self, gpu: &Gpu, renderer: &mut WgpuRenderer, f_num: u32) {
+        if let Some(video) = &self.video
+            && self.shown_frame != Some(f_num)
+            && let Some(frame) = video.get(f_num as usize - 1)
+        {
+            self.image.load_rgb(gpu, &format!("{}#{f_num}", self.kind), frame);
+            self.shown_frame = Some(f_num);
+        }
+        self.image.update(gpu);
+        let Some(view) = self.image.view() else {
+            self.texture_id = None;
+            return;
+        };
+        let generation = self.image.generation();
+        self.texture_id = match self.texture {
+            Some(id) if self.generation == generation => Some(id.texture_id()),
+            Some(id) => renderer.update_external_texture(id, view).ok().map(|_| id.texture_id()),
+            None => renderer.register_external_texture(view).ok().map(|id| {
+                self.texture = Some(id);
+                id.texture_id()
+            }),
+        };
+        self.generation = generation;
+    }
 }
 
 fn video_status_suffix(video: Option<&FrameStore>) -> String {
