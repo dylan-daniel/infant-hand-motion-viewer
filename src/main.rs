@@ -22,7 +22,8 @@ use infant_hand_motion_viewer::config::Config;
 use infant_hand_motion_viewer::data::{MeshSequence, Transform, compute_transform, reference_depth};
 use infant_hand_motion_viewer::graphics::{
     Camera, FrameGpu, Framebuffer, FreeCamera, Gpu, HandOverlay, ImageTexture, OrbitCamera, Renderer, SceneRender,
-    overlay_focal_length, prepare_frame, prepare_overlay_hands, required_device_features, supported_sample_counts,
+    hand_display_color, overlay_focal_length, prepare_frame, prepare_overlay_hands, required_device_features,
+    supported_sample_counts,
 };
 use infant_hand_motion_viewer::remote::{ConnectionState, RemoteClient, RemoteConfig};
 use infant_hand_motion_viewer::ui::{
@@ -969,7 +970,13 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
 
     // Format status line
     let status = if let Some(ref seq) = state.sequence {
-        let hands = seq.hand_count(state.current_frame);
+        let per_track = state.settings.per_track_coloring;
+        let hands = seq.load_frame(state.current_frame).map_or(0, |frame| {
+            frame
+                .iter()
+                .filter(|hand| hand_display_color(hand, per_track).is_some())
+                .count()
+        });
         let s_suffix = if hands == 1 { "" } else { "s" };
         format!(
             "frame {} / {} - {} hand{}{}",
