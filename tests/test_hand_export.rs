@@ -44,4 +44,8 @@ fn test_synthetic_hexport_roundtrip() {
     assert_eq!(rows[0].frame, 1);
     assert_eq!(rows[0].label, "infant");
     assert_eq!(rows[0].is_right, 1);
+    assert_eq!(rows[0].flag_competing_sam3_tracks, 0);
+    assert_eq!(rows[0].flag_low_sam3_wilor_coverage, 0);
+    assert_eq!(rows[0].flag_chirality_mismatch, 1);
+    assert_eq!(rows[0].flag_persistent_adult_interference, 1);
 }

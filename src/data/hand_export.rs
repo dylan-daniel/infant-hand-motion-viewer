@@ -116,6 +116,10 @@ pub struct HandExportRow {
     pub flag_scale_jump: i8,
     pub flag_track_contaminated: i8,
     pub flag_track_fragmented: i8,
+    pub flag_competing_sam3_tracks: i8,
+    pub flag_low_sam3_wilor_coverage: i8,
+    pub flag_chirality_mismatch: i8,
+    pub flag_persistent_adult_interference: i8,
 }
 
 /// Converts an axis-angle rotation vector (x, y, z) into a row-major 3x3 rotation matrix using Rodrigues' formula.
@@ -300,6 +304,10 @@ pub fn parse_hand_export(raw: &[u8], source: &str) -> Result<Vec<HandExportRow>,
     let flag_scale_jump_col = find_col("flag_scale_jump");
     let flag_track_contaminated_col = find_col("flag_track_contaminated");
     let flag_track_fragmented_col = find_col("flag_track_fragmented");
+    let flag_competing_sam3_tracks_col = find_col("flag_competing_sam3_tracks");
+    let flag_low_sam3_wilor_coverage_col = find_col("flag_low_sam3_wilor_coverage");
+    let flag_chirality_mismatch_col = find_col("flag_chirality_mismatch");
+    let flag_persistent_adult_interference_col = find_col("flag_persistent_adult_interference");
 
     let cam_t_x_col = require("cam_t_x")?;
     let cam_t_y_col = require("cam_t_y")?;
@@ -378,6 +386,10 @@ pub fn parse_hand_export(raw: &[u8], source: &str) -> Result<Vec<HandExportRow>,
             flag_scale_jump: get_int8_opt(flag_scale_jump_col, r),
             flag_track_contaminated: get_int8_opt(flag_track_contaminated_col, r),
             flag_track_fragmented: get_int8_opt(flag_track_fragmented_col, r),
+            flag_competing_sam3_tracks: get_int8_opt(flag_competing_sam3_tracks_col, r),
+            flag_low_sam3_wilor_coverage: get_int8_opt(flag_low_sam3_wilor_coverage_col, r),
+            flag_chirality_mismatch: get_int8_opt(flag_chirality_mismatch_col, r),
+            flag_persistent_adult_interference: get_int8_opt(flag_persistent_adult_interference_col, r),
         });
     }
 

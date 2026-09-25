@@ -46,6 +46,10 @@ pub fn generate_synthetic_hexport(subject: &str, trial: &str) -> Vec<u8> {
     columns.push(("flag_scale_jump", 2));
     columns.push(("flag_track_contaminated", 2));
     columns.push(("flag_track_fragmented", 2));
+    columns.push(("flag_competing_sam3_tracks", 2));
+    columns.push(("flag_low_sam3_wilor_coverage", 2));
+    columns.push(("flag_chirality_mismatch", 2));
+    columns.push(("flag_persistent_adult_interference", 2));
 
     let col_count = columns.len() as u32;
 
@@ -80,7 +84,10 @@ pub fn generate_synthetic_hexport(subject: &str, trial: &str) -> Vec<u8> {
             }
             2 => {
                 // Int8
-                let val: i8 = if *name == "is_right" { 1 } else { 0 };
+                let val: i8 = match *name {
+                    "is_right" | "flag_chirality_mismatch" | "flag_persistent_adult_interference" => 1,
+                    _ => 0,
+                };
                 payload.push(val as u8);
             }
             3 => {
