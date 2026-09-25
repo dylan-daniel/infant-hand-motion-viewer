@@ -63,7 +63,7 @@ pub const FLAG_LAYERS: [FlagLayer; FLAG_LAYER_COUNT] = [
     },
     FlagLayer {
         column_name: "flag_track_fragmented",
-        display_name: "Track Fragmented (Multiple IDs)",
+        display_name: "Track Fragmented (Hand-over Off SAM3 Mask)",
         color: [80, 200, 120, 90],
         hidden_hand_involved: false,
     },
