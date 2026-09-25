@@ -444,41 +444,18 @@ pub fn draw_viewport_window(
 
         // Top-left overlay: FPS and status rendered with crisp overlay font
         {
-            let draw_list = ui.get_window_draw_list();
             let fps_color = crate::ui::rgba(219, 219, 76, 255); // 0.86, 0.86, 0.3, 1.0
             let fps_text = format!("{fps:.0} fps");
-            if let Some(font) = fps_font {
-                draw_list.add_text_with_font(
-                    font,
-                    FPS_FONT_SIZE,
-                    [image_pos[0] + 8.0, image_pos[1] + 6.0],
-                    fps_color,
-                    &fps_text,
-                    0.0,
-                    None,
-                );
-                if !status.is_empty() {
-                    let status_color = crate::ui::rgba(217, 217, 230, 255); // 0.85, 0.85, 0.9, 1.0
-                    draw_list.add_text_with_font(
-                        font,
-                        FPS_FONT_SIZE,
-                        [image_pos[0] + 8.0, image_pos[1] + 6.0 + FPS_FONT_SIZE],
-                        status_color,
-                        status,
-                        0.0,
-                        None,
-                    );
-                }
-            } else {
-                draw_list.add_text([image_pos[0] + 8.0, image_pos[1] + 6.0], fps_color, &fps_text);
-                if !status.is_empty() {
-                    let status_color = crate::ui::rgba(217, 217, 230, 255);
-                    draw_list.add_text(
-                        [image_pos[0] + 8.0, image_pos[1] + 6.0 + FPS_FONT_SIZE],
-                        status_color,
-                        status,
-                    );
-                }
+            let font_token = fps_font.map(|font| ui.push_font(font));
+            ui.set_cursor_screen_pos([image_pos[0] + 8.0, image_pos[1] + 6.0]);
+            ui.text_colored(fps_color, &fps_text);
+            if !status.is_empty() {
+                let status_color = crate::ui::rgba(217, 217, 230, 255); // 0.85, 0.85, 0.9, 1.0
+                ui.set_cursor_screen_pos([image_pos[0] + 8.0, image_pos[1] + 6.0 + FPS_FONT_SIZE]);
+                ui.text_colored(status_color, status);
+            }
+            if let Some(token) = font_token {
+                token.pop();
             }
         }
 
