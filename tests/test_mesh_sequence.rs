@@ -1,5 +1,6 @@
 use infant_hand_motion_viewer::data::geometry::compute_transform;
 use infant_hand_motion_viewer::data::mesh_sequence::{MeshSequence, reference_depth};
+use infant_hand_motion_viewer::ui::FLAG_LAYERS;
 
 mod common;
 use common::TempSyntheticExport;
@@ -29,9 +30,14 @@ fn test_synthetic_mesh_sequence_loading() {
     let depth = reference_depth(frame0);
     assert!(depth.is_finite());
 
-    // Flag query test: optional flags were set to 0 in synthetic generator
-    assert!(!seq.is_flagged(0, 0, true));
-    assert!(!seq.is_flagged(0, 0, false));
+    let layer = |column: &str| FLAG_LAYERS.iter().position(|l| l.column_name == column).unwrap();
+    assert!(!seq.is_flagged(0, layer("flag_same_side_infant_conflict"), true));
+    assert!(!seq.is_flagged(0, layer("flag_competing_sam3_tracks"), false));
+    for column in ["flag_chirality_mismatch", "flag_persistent_adult_interference"] {
+        assert!(seq.is_flagged(0, layer(column), true));
+        assert!(seq.is_flagged(0, layer(column), false));
+        assert!(frame0[0].flags[layer(column)]);
+    }
 }
 
 #[test]

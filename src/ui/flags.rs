@@ -1,9 +1,15 @@
 use dear_imgui_rs::{Condition, Id, Ui, WindowFlags};
 
+use crate::data::FLAG_LAYER_COUNT;
 use crate::ui::transport::FLAG_LAYERS;
 
 /// Draw the dockable "Flags" window that controls which flag indicators are visible.
-pub fn draw_flags_window(ui: &Ui, title: &str, flag_layers_enabled: &mut [bool; 7], dock_id: Option<Id>) {
+pub fn draw_flags_window(
+    ui: &Ui,
+    title: &str,
+    flag_layers_enabled: &mut [bool; FLAG_LAYER_COUNT],
+    dock_id: Option<Id>,
+) {
     if let Some(did) = dock_id {
         ui.set_next_window_dock_id_with_cond(did, Condition::FirstUseEver);
     }

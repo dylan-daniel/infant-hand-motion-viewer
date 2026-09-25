@@ -6,7 +6,7 @@ use crate::data::geometry::{HandCamera, HandData};
 use crate::data::hand_export::{HandExportError, HandExportRow, load_hand_export, parse_hand_export};
 use crate::data::mano_model::mano_forward;
 
-pub const FLAG_LAYER_COUNT: usize = 7;
+pub const FLAG_LAYER_COUNT: usize = 11;
 
 pub type Frame = Vec<HandData>;
 
@@ -92,6 +92,10 @@ impl MeshSequence {
                 row.flag_scale_jump != 0,
                 row.flag_track_contaminated != 0,
                 row.flag_track_fragmented != 0,
+                row.flag_competing_sam3_tracks != 0,
+                row.flag_low_sam3_wilor_coverage != 0,
+                row.flag_chirality_mismatch != 0,
+                row.flag_persistent_adult_interference != 0,
             ];
 
             let data = HandData {

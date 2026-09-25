@@ -1,6 +1,7 @@
 use glam::{IVec2, Mat3, Vec3, Vec4};
 
 use crate::data::mano_model::default_mano_faces;
+use crate::data::mesh_sequence::FLAG_LAYER_COUNT;
 
 pub const DEFAULT_COLOR: Vec4 = Vec4::new(0.6, 0.75, 0.9, 1.0);
 pub const LEFT_HAND_COLOR: Vec4 = Vec4::new(0.85, 0.15, 0.15, 1.0);
@@ -111,7 +112,7 @@ pub struct HandData {
     /// The camera this hand was fitted under, when the source recorded one.
     pub camera: Option<HandCamera>,
     /// Flags from the hexport row for this hand (e.g. conflicts, jumps, track contamination).
-    pub flags: [bool; 7],
+    pub flags: [bool; FLAG_LAYER_COUNT],
 }
 
 /// Fixed translation and scale framing a sequence on the 3D grid.

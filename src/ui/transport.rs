@@ -1,6 +1,6 @@
 use dear_imgui_rs::{StyleColor, Ui};
 
-use crate::data::mesh_sequence::MeshSequence;
+use crate::data::mesh_sequence::{FLAG_LAYER_COUNT, MeshSequence};
 use crate::ui::PLAYBACK_BAR_HEIGHT;
 use crate::ui::icons::UiIcons;
 
@@ -24,7 +24,7 @@ pub struct FlagLayer {
     pub hidden_hand_involved: bool,
 }
 
-pub const FLAG_LAYERS: [FlagLayer; 7] = [
+pub const FLAG_LAYERS: [FlagLayer; FLAG_LAYER_COUNT] = [
     FlagLayer {
         column_name: "flag_same_side_infant_conflict",
         display_name: "Same-Side Infant Conflict",
@@ -67,9 +67,33 @@ pub const FLAG_LAYERS: [FlagLayer; 7] = [
         color: [80, 200, 120, 90],
         hidden_hand_involved: false,
     },
+    FlagLayer {
+        column_name: "flag_competing_sam3_tracks",
+        display_name: "Competing SAM3 Tracks",
+        color: [70, 110, 255, 100],
+        hidden_hand_involved: false,
+    },
+    FlagLayer {
+        column_name: "flag_low_sam3_wilor_coverage",
+        display_name: "Low SAM3-WiLoR Coverage",
+        color: [150, 150, 150, 100],
+        hidden_hand_involved: false,
+    },
+    FlagLayer {
+        column_name: "flag_chirality_mismatch",
+        display_name: "Chirality Mismatch (Re-fitted L/R)",
+        color: [255, 255, 255, 110],
+        hidden_hand_involved: false,
+    },
+    FlagLayer {
+        column_name: "flag_persistent_adult_interference",
+        display_name: "Adult Hand Over Infant Hand",
+        color: [170, 110, 60, 110],
+        hidden_hand_involved: false,
+    },
 ];
 
-pub const FLAG_COLORS: [[f32; 4]; 7] = [
+pub const FLAG_COLORS: [[f32; 4]; FLAG_LAYER_COUNT] = [
     [1.0, 0.5, 0.0, 0.85],
     [1.0, 0.9, 0.1, 0.85],
     [0.1, 0.9, 1.0, 0.85],
@@ -77,9 +101,13 @@ pub const FLAG_COLORS: [[f32; 4]; 7] = [
     [0.7, 0.2, 1.0, 0.85],
     [1.0, 0.2, 0.2, 0.85],
     [1.0, 0.4, 0.6, 0.85],
+    [0.3, 0.45, 1.0, 0.85],
+    [0.6, 0.6, 0.6, 0.85],
+    [1.0, 1.0, 1.0, 0.85],
+    [0.67, 0.43, 0.24, 0.85],
 ];
 
-pub const FLAG_NAMES: [&str; 7] = [
+pub const FLAG_NAMES: [&str; FLAG_LAYER_COUNT] = [
     "Same-Side Infant Conflict",
     "Same-Side Unknown Conflict",
     "Translation Jump",
@@ -87,6 +115,10 @@ pub const FLAG_NAMES: [&str; 7] = [
     "Scale Jump",
     "Track Contaminated",
     "Track Fragmented",
+    "Competing SAM3 Tracks",
+    "Low SAM3-WiLoR Coverage",
+    "Chirality Mismatch",
+    "Adult Interference",
 ];
 
 /// State of playback transport passed to panes that can host the transport bar.
@@ -99,7 +131,7 @@ pub struct Transport<'a> {
     pub show_transport: bool,
     pub sequence: Option<&'a MeshSequence>,
     pub per_track_coloring: bool,
-    pub flag_layers_enabled: [bool; 7],
+    pub flag_layers_enabled: [bool; FLAG_LAYER_COUNT],
 }
 
 impl Default for Transport<'_> {
@@ -113,7 +145,7 @@ impl Default for Transport<'_> {
             show_transport: false,
             sequence: None,
             per_track_coloring: false,
-            flag_layers_enabled: [true; 7],
+            flag_layers_enabled: [true; FLAG_LAYER_COUNT],
         }
     }
 }
@@ -214,7 +246,7 @@ pub fn draw_flag_overlay(
     band_bottom: f32,
     sequence: &MeshSequence,
     per_track_coloring: bool,
-    flag_layers_enabled: [bool; 7],
+    flag_layers_enabled: [bool; FLAG_LAYER_COUNT],
 ) {
     let frame_count = geometry.frame_count();
     if frame_count <= 1 {
