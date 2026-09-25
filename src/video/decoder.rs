@@ -51,6 +51,7 @@ pub fn ffmpeg_available() -> bool {
 }
 
 fn command(tool: &Path) -> Command {
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut command = Command::new(tool);
     #[cfg(windows)]
     {

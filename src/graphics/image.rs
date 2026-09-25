@@ -109,7 +109,7 @@ impl ImageTexture {
 
             if let Some((width, height, rgb)) = raw {
                 let mut rgba = Vec::with_capacity(rgb.len() / 3 * 4);
-                for px in rgb.chunks_exact(3) {
+                for px in rgb.as_chunks::<3>().0 {
                     rgba.extend_from_slice(&[px[0], px[1], px[2], 255]);
                 }
                 let mut s = shared.lock().unwrap();
