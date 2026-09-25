@@ -1,8 +1,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::data::FLAG_LAYER_COUNT;
 use crate::video::{self, VideoCache};
 
 fn default_playback_speed() -> f32 {
@@ -13,8 +14,18 @@ fn default_true() -> bool {
     true
 }
 
-fn default_flag_layers() -> [bool; 7] {
-    [true; 7]
+fn default_flag_layers() -> [bool; FLAG_LAYER_COUNT] {
+    [true; FLAG_LAYER_COUNT]
+}
+
+/// A toggle list saved before flags were added keeps its entries; flags it doesn't cover start enabled.
+fn deserialize_flag_layers<'de, D: Deserializer<'de>>(deserializer: D) -> Result<[bool; FLAG_LAYER_COUNT], D::Error> {
+    let saved = Vec::<bool>::deserialize(deserializer)?;
+    let mut layers = default_flag_layers();
+    for (layer, enabled) in layers.iter_mut().zip(saved) {
+        *layer = enabled;
+    }
+    Ok(layers)
 }
 
 fn default_remote_port() -> u16 {
@@ -76,8 +87,8 @@ pub struct Config {
     pub free_camera: bool,
     #[serde(default)]
     pub active_pane: i32,
-    #[serde(default = "default_flag_layers")]
-    pub flag_layers_enabled: [bool; 7],
+    #[serde(default = "default_flag_layers", deserialize_with = "deserialize_flag_layers")]
+    pub flag_layers_enabled: [bool; FLAG_LAYER_COUNT],
 
     #[serde(default)]
     pub data_folder: Option<String>,

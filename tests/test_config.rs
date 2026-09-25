@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use infant_hand_motion_viewer::config::Config;
+use infant_hand_motion_viewer::data::FLAG_LAYER_COUNT;
 
 struct TempDirGuard(PathBuf);
 
@@ -39,7 +40,7 @@ fn test_config_defaults() {
     assert!(!cfg.per_track_coloring);
     assert!(!cfg.show_hand_overlay);
     assert!(cfg.free_camera);
-    assert_eq!(cfg.flag_layers_enabled, [true; 7]);
+    assert_eq!(cfg.flag_layers_enabled, [true; FLAG_LAYER_COUNT]);
     assert_eq!(cfg.remote_port, 22);
     assert_eq!(cfg.remote_python, "python3");
     assert_eq!(cfg.window_width, 1024);
@@ -130,7 +131,7 @@ fn test_config_wrong_typed_entry_only_resets_that_entry() {
 
     let cfg = Config::load(&path);
     assert_eq!(cfg.remote_port, 22);
-    assert_eq!(cfg.flag_layers_enabled, [true; 7]);
+    assert_eq!(cfg.flag_layers_enabled, [true; FLAG_LAYER_COUNT]);
     assert_eq!(cfg.playback_speed, 2.0);
     assert_eq!(cfg.last_frame, 12);
 }
@@ -231,4 +232,15 @@ fn test_video_cache_defaults_to_the_temp_dir_and_is_off_when_disabled() {
     assert_eq!(cfg.video_cache_location, None);
     cfg.video_cache_location = Some("elsewhere".to_string());
     assert!(cfg.video_cache().is_none());
+}
+
+#[test]
+fn test_config_flag_toggles_saved_before_new_flags_keep_their_values() {
+    let guard = TempDirGuard::new("config_flag_layers");
+    let path = guard.path().join("config.json");
+    fs::write(&path, r#"{"flag_layers_enabled": [false, true, false]}"#).unwrap();
+
+    let cfg = Config::load(&path);
+    assert_eq!(cfg.flag_layers_enabled[..3], [false, true, false]);
+    assert!(cfg.flag_layers_enabled[3..].iter().all(|&enabled| enabled));
 }
