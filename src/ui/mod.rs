@@ -2,6 +2,7 @@ pub mod explorer;
 pub mod flags;
 pub mod icons;
 pub mod image_view;
+pub mod measures;
 pub mod menu_bar;
 pub mod modals;
 pub mod transport;
@@ -18,6 +19,7 @@ pub use explorer::{ExplorerResult, FileExplorer, SourceMode, natural_cmp};
 pub use flags::draw_flags_window;
 pub use icons::UiIcons;
 pub use image_view::{ImageViewResult, draw_image_window};
+pub use measures::{MEASURE_TITLES, MeasuresView, draw_measures_window};
 pub use menu_bar::{MenuResult, MenuState, draw_menu_bar};
 pub use modals::draw_remote_modal;
 pub use transport::{

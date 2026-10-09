@@ -287,3 +287,47 @@ fn test_slider_flag_band_is_visible_when_frames_are_denser_than_pixels() {
     let (left, right) = geometry.span(4000, 4000);
     assert!(right - left >= 1.0 - 1e-3, "band is {}px wide", right - left);
 }
+
+mod measures_plot {
+    use infant_hand_motion_viewer::data::MeasureSeries;
+    use infant_hand_motion_viewer::ui::measures::{finite_runs, frame_to_x, value_range, x_to_frame};
+
+    fn series(values: Vec<f32>) -> MeasureSeries {
+        MeasureSeries {
+            label: "s".into(),
+            is_right: true,
+            hand_track_id: None,
+            values,
+        }
+    }
+
+    #[test]
+    fn nan_frames_split_a_line_into_runs() {
+        let runs = finite_runs(&[1.0, 2.0, f32::NAN, 3.0, f32::NAN, f32::NAN, 4.0, 5.0]);
+        assert_eq!(
+            runs,
+            vec![vec![(0, 1.0), (1, 2.0)], vec![(3, 3.0)], vec![(6, 4.0), (7, 5.0)]]
+        );
+        assert!(finite_runs(&[f32::NAN]).is_empty());
+    }
+
+    #[test]
+    fn frame_and_x_round_trip() {
+        for frame in 0..11 {
+            let x = frame_to_x(frame, 11, 100.0, 300.0);
+            assert_eq!(x_to_frame(x, 11, 100.0, 300.0), frame);
+        }
+        assert_eq!(x_to_frame(-50.0, 11, 100.0, 300.0), 0);
+        assert_eq!(x_to_frame(900.0, 11, 100.0, 300.0), 10);
+        assert_eq!(x_to_frame(150.0, 1, 100.0, 300.0), 0);
+    }
+
+    #[test]
+    fn value_range_ignores_nan_and_pads_flat_data() {
+        assert_eq!(value_range(&[series(vec![f32::NAN])]), None);
+        let (lo, hi) = value_range(&[series(vec![0.0, f32::NAN, 1.0])]).unwrap();
+        assert!(lo < 0.0 && hi > 1.0);
+        let (lo, hi) = value_range(&[series(vec![2.0, 2.0])]).unwrap();
+        assert!(lo < 2.0 && hi > 2.0);
+    }
+}
