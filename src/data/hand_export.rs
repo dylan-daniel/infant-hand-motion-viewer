@@ -65,10 +65,21 @@ impl DType {
 
 #[derive(Debug, Clone)]
 struct ColumnInfo {
-    #[allow(dead_code)]
     dtype: DType,
     offset: usize,
 }
+
+/// Hand-shape measure columns in a `.hexport` file, in display order.
+pub const MEASURE_COLUMNS: [&str; MEASURE_COUNT] = [
+    "aperture_thumb_index_norm",
+    "hand_opening_norm",
+    "flexion_index_norm",
+    "flexion_middle_norm",
+    "flexion_ring_norm",
+    "flexion_little_norm",
+    "opposition_angle_deg",
+];
+pub const MEASURE_COUNT: usize = 7;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ManoParams {
@@ -109,6 +120,8 @@ pub struct HandExportRow {
     pub scaled_focal_length: f32,
     pub img_w: i32,
     pub img_h: i32,
+    /// Hand-shape measures in [`MEASURE_COLUMNS`] order; NaN where the column is absent or the value is missing.
+    pub measures: [f32; MEASURE_COUNT],
     pub flag_same_side_infant_conflict: i8,
     pub flag_same_side_infant_unknown_conflict: i8,
     pub flag_translation_jump: i8,
@@ -287,6 +300,11 @@ pub fn parse_hand_export(raw: &[u8], source: &str) -> Result<Vec<HandExportRow>,
         }
     };
 
+    let measure_cols: Vec<Option<&ColumnInfo>> = MEASURE_COLUMNS
+        .iter()
+        .map(|name| find_col(name).filter(|c| c.dtype == DType::Float32))
+        .collect();
+
     let subject_col = require("subject")?;
     let trial_col = require("trial")?;
     let frame_col = require("frame")?;
@@ -379,6 +397,7 @@ pub fn parse_hand_export(raw: &[u8], source: &str) -> Result<Vec<HandExportRow>,
             scaled_focal_length: get_float(scaled_focal_length_col, r),
             img_w: get_int32(img_w_col, r),
             img_h: get_int32(img_h_col, r),
+            measures: std::array::from_fn(|i| measure_cols[i].map_or(f32::NAN, |c| get_float(c, r))),
             flag_same_side_infant_conflict: get_int8_opt(flag_same_side_infant_conflict_col, r),
             flag_same_side_infant_unknown_conflict: get_int8_opt(flag_same_side_infant_unknown_conflict_col, r),
             flag_translation_jump: get_int8_opt(flag_translation_jump_col, r),

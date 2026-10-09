@@ -213,3 +213,100 @@ pub fn read_rgba(
     readback.unmap();
     pixels
 }
+
+/// One synthetic hand row for [`generate_measure_hexport`].
+pub struct MeasureRow {
+    pub frame: i32,
+    pub is_right: bool,
+    pub track_id: i32,
+    pub label: &'static str,
+    pub measures: [f32; 7],
+}
+
+/// Builds `.hexport` bytes with one row per entry (all MANO parameters zero), optionally with the measure columns.
+pub fn generate_measure_hexport(rows: &[MeasureRow], with_measures: bool) -> Vec<u8> {
+    let n = rows.len();
+    let mut names: Vec<(String, u8)> = vec![
+        ("subject".into(), 3),
+        ("trial".into(), 3),
+        ("frame".into(), 1),
+        ("is_right".into(), 2),
+        ("hand_track_id".into(), 1),
+        ("label".into(), 3),
+        ("scaled_focal_length".into(), 0),
+        ("img_w".into(), 1),
+        ("img_h".into(), 1),
+        ("cam_t_x".into(), 0),
+        ("cam_t_y".into(), 0),
+        ("cam_t_z".into(), 0),
+    ];
+    for i in 0..10 {
+        names.push((format!("beta_{i}"), 0));
+    }
+    for i in 0..3 {
+        names.push((format!("gorient_rotvec_{i}"), 0));
+    }
+    for i in 0..45 {
+        names.push((format!("pose_rotvec_{i}"), 0));
+    }
+    if with_measures {
+        for name in infant_hand_motion_viewer::data::MEASURE_COLUMNS {
+            names.push((name.to_string(), 0));
+        }
+    }
+
+    let mut payload = Vec::new();
+    payload.extend_from_slice(&(n as u32).to_le_bytes());
+    payload.extend_from_slice(&(names.len() as u32).to_le_bytes());
+    for (name, dtype) in &names {
+        payload.push(name.len() as u8);
+        payload.push(*dtype);
+        payload.extend_from_slice(name.as_bytes());
+    }
+    for (name, dtype) in &names {
+        for row in rows {
+            match *dtype {
+                0 => {
+                    let value = infant_hand_motion_viewer::data::MEASURE_COLUMNS
+                        .iter()
+                        .position(|m| m == name)
+                        .map(|i| row.measures[i])
+                        .unwrap_or(if name == "scaled_focal_length" { 1000.0 } else { 0.0 });
+                    payload.extend_from_slice(&value.to_le_bytes());
+                }
+                1 => {
+                    let value = match name.as_str() {
+                        "frame" => row.frame,
+                        "hand_track_id" => row.track_id,
+                        "img_w" => 640,
+                        "img_h" => 480,
+                        _ => 0,
+                    };
+                    payload.extend_from_slice(&value.to_le_bytes());
+                }
+                2 => payload.push(u8::from(row.is_right)),
+                _ => {
+                    let text = match name.as_str() {
+                        "subject" => "S",
+                        "trial" => "T",
+                        _ => row.label,
+                    };
+                    let mut buf = [0u8; 32];
+                    buf[..text.len()].copy_from_slice(text.as_bytes());
+                    payload.extend_from_slice(&buf);
+                }
+            }
+        }
+    }
+
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(&payload).unwrap();
+    let compressed = encoder.finish().unwrap();
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"HEXP");
+    bytes.extend_from_slice(&1u32.to_le_bytes());
+    bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&compressed);
+    bytes
+}

@@ -49,3 +49,22 @@ fn test_synthetic_hexport_roundtrip() {
     assert_eq!(rows[0].flag_chirality_mismatch, 1);
     assert_eq!(rows[0].flag_persistent_adult_interference, 1);
 }
+
+#[test]
+fn test_measure_columns_load_and_default_to_nan_when_absent() {
+    use common::{MeasureRow, generate_measure_hexport};
+    use infant_hand_motion_viewer::data::parse_hand_export;
+
+    let rows = [MeasureRow {
+        frame: 3,
+        is_right: true,
+        track_id: 1,
+        label: "infant",
+        measures: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 70.0],
+    }];
+    let with = parse_hand_export(&generate_measure_hexport(&rows, true), "t").unwrap();
+    assert_eq!(with[0].measures, [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 70.0]);
+
+    let without = parse_hand_export(&generate_measure_hexport(&rows, false), "t").unwrap();
+    assert!(without[0].measures.iter().all(|m| m.is_nan()));
+}
