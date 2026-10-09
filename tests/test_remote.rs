@@ -124,15 +124,18 @@ fn test_remote_client_local_daemon_e2e() {
     )
     .unwrap();
     let video = client
-        .fetch_video(&hexport_path.to_string_lossy())
+        .fetch_video(&hexport_path.to_string_lossy(), None)
         .unwrap()
         .expect("video should be found");
     assert_eq!(video.bytes, video_bytes);
     assert_eq!(video.filename, "trial.mp4");
     assert_eq!(video.video_hash, "hash");
     fs::remove_file(&video_path).unwrap();
-    assert_eq!(client.fetch_video(&hexport_path.to_string_lossy()).unwrap(), None);
-    assert_eq!(client.fetch_video("/definitely/not/a/file.hexport").unwrap(), None);
+    assert_eq!(client.fetch_video(&hexport_path.to_string_lossy(), None).unwrap(), None);
+    assert_eq!(
+        client.fetch_video("/definitely/not/a/file.hexport", None).unwrap(),
+        None
+    );
 
     // Test disconnect
     client.disconnect();

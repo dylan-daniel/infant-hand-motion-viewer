@@ -120,7 +120,7 @@ fn a_cached_video_loads_without_the_remote() {
         .unwrap();
     let worker = WorkerQueue::new();
     let export = format!("/remote/hand_export/{HASH}__native__p.hexport");
-    let store = load_remote_video(RemoteClient::new(), export, Some(cache), &worker);
+    let store = load_remote_video(RemoteClient::new(), export, None, Some(cache), &worker);
     wait_for_status(&store, |s| *s == LoadStatus::Ready);
     assert_eq!(store.len(), 12);
 }
@@ -135,7 +135,7 @@ fn an_unreadable_cache_entry_is_dropped() {
     cache.store(HASH, b"garbage").unwrap();
     let worker = WorkerQueue::new();
     let export = format!("/remote/hand_export/{HASH}__native__p.hexport");
-    let store = load_remote_video(RemoteClient::new(), export, Some(cache.clone()), &worker);
+    let store = load_remote_video(RemoteClient::new(), export, None, Some(cache.clone()), &worker);
     wait_for_status(&store, |s| matches!(s, LoadStatus::Failed(_)));
     assert!(cache.get(HASH).is_none());
 }
@@ -143,7 +143,7 @@ fn an_unreadable_cache_entry_is_dropped() {
 #[test]
 fn without_a_cache_or_connection_loading_fails_clearly() {
     let worker = WorkerQueue::new();
-    let store = load_remote_video(RemoteClient::new(), "/x/a.hexport".to_string(), None, &worker);
+    let store = load_remote_video(RemoteClient::new(), "/x/a.hexport".to_string(), None, None, &worker);
     wait_for_status(&store, |s| matches!(s, LoadStatus::Failed(_)));
 }
 
