@@ -27,8 +27,8 @@ use infant_hand_motion_viewer::graphics::{
 };
 use infant_hand_motion_viewer::remote::{ConnectionState, RemoteClient, RemoteConfig};
 use infant_hand_motion_viewer::ui::{
-    FileExplorer, MenuState, SourceMode, Transport, UiIcons, draw_flags_window, draw_image_window, draw_menu_bar,
-    draw_remote_modal, draw_viewport_window,
+    FileExplorer, MeasuresView, MenuState, SourceMode, Transport, UiIcons, draw_flags_window, draw_image_window,
+    draw_measures_window, draw_menu_bar, draw_remote_modal, draw_viewport_window,
 };
 use infant_hand_motion_viewer::util::WorkerQueue;
 use infant_hand_motion_viewer::util::window_placement::{MonitorRect, is_position_reachable};
@@ -131,6 +131,7 @@ struct AppState {
     restore_focus_frames: i32,
     explorer: FileExplorer,
     show_remote_modal: bool,
+    measures_view: MeasuresView,
     remote_connect_in_flight: bool,
     remote_config: RemoteConfig,
     remote_client: RemoteClient,
@@ -490,6 +491,7 @@ impl ApplicationHandler for AppRunner {
             restore_focus_frames: 3,
             explorer,
             show_remote_modal: false,
+            measures_view: MeasuresView::default(),
             remote_connect_in_flight: false,
             remote_config,
             remote_client,
@@ -1040,6 +1042,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         free_camera: state.settings.free_camera,
         per_track_coloring: state.settings.per_track_coloring,
         hand_overlay: state.settings.show_hand_overlay,
+        show_measures: state.settings.show_measures,
         msaa_samples: state.renderer.sample_count(),
         msaa_options: state.gpu.msaa_counts.clone(),
         open_file: open_file_label,
@@ -1053,6 +1056,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
     let key_scene = WindowKey::new("Scene", "Scene").expect("scene key");
     let key_frame_view = WindowKey::new("Frame View", "Frame View").expect("frame view key");
     let key_flags = WindowKey::new("Flags", "Flags").expect("flags key");
+    let key_measures = WindowKey::new("Hand Measures", "Hand Measures").expect("measures key");
 
     let full_layout = DockLayout::split(
         DockSplit::Left,
@@ -1064,14 +1068,15 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             DockLayout::split(
                 DockSplit::Down,
                 0.30,
-                DockLayout::tabs([&key_flags]),
+                DockLayout::tabs([&key_flags, &key_measures]),
                 DockLayout::tabs([&key_frame_view]),
             ),
             DockLayout::tabs([&key_scene]),
         ),
     );
 
-    let (menu_result, explorer_result, viewport_result, image_result) = {
+    let measures_menu_in = state.settings.show_measures;
+    let (menu_result, explorer_result, viewport_result, image_result, measures_scrub) = {
         let ui = state.imgui.frame();
 
         let menu_result = draw_menu_bar(ui, menu_state);
@@ -1155,6 +1160,17 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
 
         draw_flags_window(ui, "Flags###Flags", &mut state.settings.flag_layers_enabled, None);
 
+        let measures_scrub = draw_measures_window(
+            ui,
+            "Hand Measures###Hand Measures",
+            &mut state.settings.show_measures,
+            &mut state.measures_view,
+            state.sequence.as_ref(),
+            state.settings.per_track_coloring,
+            state.current_frame,
+            None,
+        );
+
         let explorer_result = state.explorer.draw_explorer_window(ui, &state.icons, None);
 
         draw_remote_modal(
@@ -1179,8 +1195,16 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             .prepare_render(ui, &state.window)
             .expect("failed to prepare imgui render");
 
-        (menu_result, explorer_result, v_res, i_res)
+        (menu_result, explorer_result, v_res, i_res, measures_scrub)
     };
+
+    if let Some(frame) = measures_scrub {
+        state.current_frame = frame;
+        state.playing = false;
+    }
+    if menu_result.state.show_measures != measures_menu_in {
+        state.settings.show_measures = menu_result.state.show_measures;
+    }
 
     state.settings.show_controls = viewport_result.show_controls;
     state.viewport_hovered = viewport_result.hovered;

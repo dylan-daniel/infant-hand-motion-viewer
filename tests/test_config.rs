@@ -39,6 +39,7 @@ fn test_config_defaults() {
     assert!(!cfg.show_camera_marker);
     assert!(!cfg.per_track_coloring);
     assert!(!cfg.show_hand_overlay);
+    assert!(!cfg.show_measures);
     assert!(cfg.free_camera);
     assert_eq!(cfg.flag_layers_enabled, [true; FLAG_LAYER_COUNT]);
     assert_eq!(cfg.remote_port, 22);

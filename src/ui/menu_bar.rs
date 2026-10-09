@@ -10,6 +10,7 @@ pub struct MenuState {
     pub free_camera: bool,
     pub per_track_coloring: bool,
     pub hand_overlay: bool,
+    pub show_measures: bool,
     /// Multisample count in use (1 = off) and the counts the GPU offers, for the Anti-Aliasing submenu.
     pub msaa_samples: u32,
     pub msaa_options: Vec<u32>,
@@ -69,6 +70,10 @@ pub fn draw_menu_bar(ui: &Ui, mut state: MenuState) -> MenuResult {
             if ui.menu_item("Disconnect") {
                 result.disconnect_remote_requested = true;
             }
+        });
+
+        ui.menu("View", || {
+            ui.checkbox("Hand Measures", &mut state.show_measures);
         });
 
         ui.menu("Settings", || {
