@@ -18,4 +18,6 @@ pub use mano_model::{
     ManoHand, ManoModel, ManoModelError, NUM_JOINTS, NUM_OUT_JOINTS, NUM_TIPS, NUM_VERTS, default_mano_faces,
     default_mano_model, mano_forward,
 };
-pub use mesh_sequence::{FLAG_LAYER_COUNT, Frame, MeshSequence, reference_depth, resolve_frames_dir};
+pub use mesh_sequence::{
+    FLAG_LAYER_COUNT, Frame, HandMeasures, MeasureSeries, MeshSequence, reference_depth, resolve_frames_dir,
+};

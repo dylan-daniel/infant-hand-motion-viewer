@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::data::geometry::{HandCamera, HandData};
-use crate::data::hand_export::{HandExportError, HandExportRow, load_hand_export, parse_hand_export};
+use crate::data::hand_export::{HandExportError, HandExportRow, MEASURE_COUNT, load_hand_export, parse_hand_export};
 use crate::data::mano_model::mano_forward;
 
 pub const FLAG_LAYER_COUNT: usize = 11;
@@ -47,6 +47,31 @@ pub fn resolve_frames_dir<P: AsRef<Path>>(export_file: P) -> PathBuf {
     parent.join("frames").join(frames_key)
 }
 
+/// One hand's hand-shape measures in one frame, in [`crate::data::MEASURE_COLUMNS`] order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HandMeasures {
+    pub is_right: bool,
+    pub is_infant: bool,
+    pub hand_track_id: i32,
+    pub values: [f32; MEASURE_COUNT],
+}
+
+impl HandMeasures {
+    fn label_kind(&self) -> &'static str {
+        if self.is_infant { "infant" } else { "other" }
+    }
+}
+
+/// One line of a measure plot: a value per sequence frame, NaN where the hand is absent.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MeasureSeries {
+    pub label: String,
+    pub is_right: bool,
+    /// The tracking ID when the series is a single track; `None` for the per-side infant series.
+    pub hand_track_id: Option<i32>,
+    pub values: Vec<f32>,
+}
+
 /// MeshSequence holds all per-frame hand meshes and flags loaded from a `.hexport` binary file.
 #[derive(Debug, Clone)]
 pub struct MeshSequence {
@@ -56,6 +81,7 @@ pub struct MeshSequence {
     frame_index: Arc<Mutex<Option<FrameIndex>>>,
     frames: Vec<Frame>,
     frame_numbers: Vec<i32>,
+    frame_measures: Vec<Vec<HandMeasures>>,
     frame_flags_all: Vec<[bool; FLAG_LAYER_COUNT]>,
     frame_flags_infant_only: Vec<[bool; FLAG_LAYER_COUNT]>,
 }
@@ -81,6 +107,7 @@ impl MeshSequence {
         let mut by_frame: BTreeMap<i32, Frame> = BTreeMap::new();
         let mut flags_all_by_frame: BTreeMap<i32, [bool; FLAG_LAYER_COUNT]> = BTreeMap::new();
         let mut flags_infant_by_frame: BTreeMap<i32, [bool; FLAG_LAYER_COUNT]> = BTreeMap::new();
+        let mut measures_by_frame: BTreeMap<i32, Vec<HandMeasures>> = BTreeMap::new();
 
         for row in rows {
             let hand = mano_forward(&row.params);
@@ -114,6 +141,12 @@ impl MeshSequence {
             };
 
             let frame_num = row.frame;
+            measures_by_frame.entry(frame_num).or_default().push(HandMeasures {
+                is_right: row.params.is_right,
+                is_infant: row.label == "infant",
+                hand_track_id: row.hand_track_id,
+                values: row.measures,
+            });
             by_frame.entry(frame_num).or_default().push(data);
 
             let flags_all = flags_all_by_frame.entry(frame_num).or_insert([false; FLAG_LAYER_COUNT]);
@@ -134,11 +167,13 @@ impl MeshSequence {
 
         let mut frames = Vec::with_capacity(by_frame.len());
         let mut frame_numbers = Vec::with_capacity(by_frame.len());
+        let mut frame_measures = Vec::with_capacity(by_frame.len());
         let mut frame_flags_all = Vec::with_capacity(by_frame.len());
         let mut frame_flags_infant_only = Vec::with_capacity(by_frame.len());
 
         for (frame_num, hands) in by_frame {
             frame_numbers.push(frame_num);
+            frame_measures.push(measures_by_frame.remove(&frame_num).unwrap());
             frame_flags_all.push(flags_all_by_frame.remove(&frame_num).unwrap());
             frame_flags_infant_only.push(flags_infant_by_frame.remove(&frame_num).unwrap());
             frames.push(hands);
@@ -150,6 +185,7 @@ impl MeshSequence {
             frame_index: Arc::new(Mutex::new(None)),
             frames,
             frame_numbers,
+            frame_measures,
             frame_flags_all,
             frame_flags_infant_only,
         }
@@ -183,6 +219,52 @@ impl MeshSequence {
 
     pub fn load_frame(&self, index: usize) -> Option<&Frame> {
         self.frames.get(index)
+    }
+
+    /// Whether any hand in the export carries a hand-shape measure value.
+    pub fn has_measure_data(&self) -> bool {
+        self.frame_measures
+            .iter()
+            .flatten()
+            .any(|hand| hand.values.iter().any(|v| v.is_finite()))
+    }
+
+    /// The lines to plot for one measure: the infant's left and right hand, or every tracked hand when
+    /// `per_track` is set. Each line has one value per sequence frame, NaN where that hand is absent.
+    pub fn measure_series(&self, measure: usize, per_track: bool) -> Vec<MeasureSeries> {
+        if measure >= MEASURE_COUNT {
+            return Vec::new();
+        }
+        let mut series: Vec<MeasureSeries> = Vec::new();
+        for (index, hands) in self.frame_measures.iter().enumerate() {
+            for hand in hands.iter().filter(|h| per_track || h.is_infant) {
+                let track = per_track.then_some(hand.hand_track_id);
+                let slot = match series
+                    .iter()
+                    .position(|s| s.hand_track_id == track && (per_track || s.is_right == hand.is_right))
+                {
+                    Some(slot) => slot,
+                    None => {
+                        let side = if hand.is_right { "Right" } else { "Left" };
+                        series.push(MeasureSeries {
+                            label: match track {
+                                Some(id) => format!("Track {id} ({}, {side})", hand.label_kind()),
+                                None => format!("Infant {side}"),
+                            },
+                            is_right: hand.is_right,
+                            hand_track_id: track,
+                            values: vec![f32::NAN; self.frames.len()],
+                        });
+                        series.len() - 1
+                    }
+                };
+                if series[slot].values[index].is_nan() {
+                    series[slot].values[index] = hand.values[measure];
+                }
+            }
+        }
+        series.sort_by_key(|s| (s.hand_track_id, s.is_right));
+        series
     }
 
     pub fn is_flagged(&self, index: usize, flag_index: usize, per_track_coloring: bool) -> bool {

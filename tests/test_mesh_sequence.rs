@@ -141,3 +141,48 @@ fn test_hands_keep_the_camera_they_were_fitted_under() {
     assert_eq!(camera.focal_length, row.scaled_focal_length);
     assert_eq!((camera.img_w, camera.img_h), (row.img_w as u32, row.img_h as u32));
 }
+
+fn measure_row(frame: i32, is_right: bool, track_id: i32, label: &'static str, v: f32) -> common::MeasureRow {
+    common::MeasureRow {
+        frame,
+        is_right,
+        track_id,
+        label,
+        measures: [v; 7],
+    }
+}
+
+#[test]
+fn test_measure_series_leaves_gaps_where_the_hand_is_absent() {
+    let rows = [
+        measure_row(0, true, 1, "infant", 0.5),
+        measure_row(0, false, 2, "infant", 0.1),
+        measure_row(0, true, 9, "adult", 0.9),
+        measure_row(2, true, 1, "infant", 0.7),
+    ];
+    let bytes = common::generate_measure_hexport(&rows, true);
+    let seq = MeshSequence::from_bytes("t", &bytes).unwrap();
+    assert!(seq.has_measure_data());
+
+    let infant = seq.measure_series(0, false);
+    assert_eq!(infant.len(), 2);
+    let left = infant.iter().find(|s| !s.is_right).unwrap();
+    let right = infant.iter().find(|s| s.is_right).unwrap();
+    assert_eq!(left.values[0], 0.1);
+    assert!(left.values[1].is_nan());
+    assert_eq!(right.values[0], 0.5);
+    assert_eq!(right.values[1], 0.7);
+
+    let tracks = seq.measure_series(0, true);
+    assert_eq!(tracks.len(), 3);
+    assert!(tracks.iter().any(|s| s.hand_track_id == Some(9) && s.values[0] == 0.9));
+    assert!(seq.measure_series(7, false).is_empty());
+}
+
+#[test]
+fn test_no_measure_data_without_the_columns() {
+    let bytes = common::generate_measure_hexport(&[measure_row(0, true, 1, "infant", 0.5)], false);
+    let seq = MeshSequence::from_bytes("t", &bytes).unwrap();
+    assert!(!seq.has_measure_data());
+    assert!(seq.measure_series(0, false)[0].values[0].is_nan());
+}
