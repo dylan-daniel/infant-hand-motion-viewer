@@ -415,8 +415,17 @@ pub fn parse_hand_export(raw: &[u8], source: &str) -> Result<Vec<HandExportRow>,
     Ok(rows)
 }
 
-/// Quickly reads only the subject and trial identifiers from a `.hexport` file without full frame decompression.
-pub fn read_hexport_metadata<P: AsRef<Path>>(path: P) -> Option<(String, String)> {
+/// What the explorer shows for a trial without parsing its rows.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HexportMetadata {
+    pub subject: String,
+    pub trial: String,
+    /// `quality_trial_score` (0-1); None for exports without the column or trials with no infant hand.
+    pub quality_score: Option<f32>,
+}
+
+/// Reads the subject, trial and trial quality score from a `.hexport` file's first row, without parsing the rest.
+pub fn read_hexport_metadata<P: AsRef<Path>>(path: P) -> Option<HexportMetadata> {
     let mut file = File::open(path).ok()?;
     let mut header = [0u8; HEADER_SIZE];
     file.read_exact(&mut header).ok()?;
@@ -506,5 +515,14 @@ pub fn read_hexport_metadata<P: AsRef<Path>>(path: P) -> Option<(String, String)
 
     let subject = get_first_string(subj_col)?;
     let trial = get_first_string(trial_col)?;
-    Some((subject, trial))
+    let quality_score = columns
+        .get("quality_trial_score")
+        .filter(|col| col.dtype == DType::Float32 && col.offset + 4 <= payload.len())
+        .map(|col| f32::from_le_bytes(payload[col.offset..col.offset + 4].try_into().unwrap()))
+        .filter(|score| score.is_finite());
+    Some(HexportMetadata {
+        subject,
+        trial,
+        quality_score,
+    })
 }

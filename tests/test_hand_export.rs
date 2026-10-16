@@ -30,9 +30,10 @@ fn test_synthetic_hexport_roundtrip() {
     // 1. Verify fast metadata reading
     let meta = read_hexport_metadata(&export.path);
     assert!(meta.is_some(), "read_hexport_metadata failed on synthetic file");
-    let (subject, trial) = meta.unwrap();
-    assert_eq!(subject, expected_subj);
-    assert_eq!(trial, expected_trial);
+    let meta = meta.unwrap();
+    assert_eq!(meta.subject, expected_subj);
+    assert_eq!(meta.trial, expected_trial);
+    assert_eq!(meta.quality_score, None);
 
     // 2. Verify full row payload loading
     let rows = load_hand_export(&export.path);
@@ -67,4 +68,21 @@ fn test_measure_columns_load_and_default_to_nan_when_absent() {
 
     let without = parse_hand_export(&generate_measure_hexport(&rows, false), "t").unwrap();
     assert!(without[0].measures.iter().all(|m| m.is_nan()));
+}
+
+#[test]
+fn test_metadata_reads_trial_quality_score_and_ignores_missing_or_nan() {
+    use common::generate_synthetic_hexport_with_quality;
+
+    let read = |quality: Option<f32>| {
+        let path = std::env::temp_dir().join(format!("quality_meta_{}_{quality:?}.hexport", std::process::id()));
+        std::fs::write(&path, generate_synthetic_hexport_with_quality("S", "T1", quality)).unwrap();
+        let meta = read_hexport_metadata(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        meta.quality_score
+    };
+
+    assert_eq!(read(Some(0.75)), Some(0.75));
+    assert_eq!(read(Some(f32::NAN)), None);
+    assert_eq!(read(None), None);
 }

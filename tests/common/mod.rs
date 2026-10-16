@@ -10,6 +10,11 @@ use flate2::write::ZlibEncoder;
 
 /// Generates valid, self-contained synthetic `.hexport` file bytes in memory for testing.
 pub fn generate_synthetic_hexport(subject: &str, trial: &str) -> Vec<u8> {
+    generate_synthetic_hexport_with_quality(subject, trial, None)
+}
+
+/// As `generate_synthetic_hexport`, with a `quality_trial_score` column when `quality` is given.
+pub fn generate_synthetic_hexport_with_quality(subject: &str, trial: &str, quality: Option<f32>) -> Vec<u8> {
     let mut payload = Vec::new();
 
     let row_count = 1u32;
@@ -50,6 +55,9 @@ pub fn generate_synthetic_hexport(subject: &str, trial: &str) -> Vec<u8> {
     columns.push(("flag_low_sam3_wilor_coverage", 2));
     columns.push(("flag_chirality_mismatch", 2));
     columns.push(("flag_persistent_adult_interference", 2));
+    if quality.is_some() {
+        columns.push(("quality_trial_score", 0));
+    }
 
     let col_count = columns.len() as u32;
 
@@ -69,7 +77,12 @@ pub fn generate_synthetic_hexport(subject: &str, trial: &str) -> Vec<u8> {
         match *dtype {
             0 => {
                 // Float32
-                payload.extend_from_slice(&0.0f32.to_le_bytes());
+                let val = if *name == "quality_trial_score" {
+                    quality.unwrap_or(0.0)
+                } else {
+                    0.0
+                };
+                payload.extend_from_slice(&val.to_le_bytes());
             }
             1 => {
                 // Int32

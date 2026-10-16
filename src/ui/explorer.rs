@@ -11,7 +11,7 @@ use dear_imgui_rs::{
     Condition, Id, StyleColor, TableColumnFlags, TableColumnWidth, TableFlags, TextureId, Ui, WindowFlags,
 };
 
-use crate::data::hand_export::read_hexport_metadata;
+use crate::data::hand_export::{HexportMetadata, read_hexport_metadata};
 use crate::remote::{ExplorerNode, RemoteClient};
 use crate::ui::icons::UiIcons;
 use crate::util::WorkerQueue;
@@ -351,7 +351,7 @@ impl FileExplorer {
             let fps_tag = if parts.len() >= 2 { parts[1] } else { "" };
             let params_tag = if parts.len() >= 3 { parts[2] } else { "" };
 
-            if let Some((subject, trial)) = read_hexport_metadata(path) {
+            if let Some(HexportMetadata { subject, trial, .. }) = read_hexport_metadata(path) {
                 let display_name = if !fps_tag.is_empty() {
                     format!("{trial}_{fps_tag}")
                 } else {
