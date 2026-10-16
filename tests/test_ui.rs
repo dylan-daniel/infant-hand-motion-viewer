@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 
 use infant_hand_motion_viewer::data::FLAG_LAYER_COUNT;
 use infant_hand_motion_viewer::ui::{
-    FLAG_COLORS, FLAG_NAMES, FileExplorer, MenuResult, MenuState, SourceMode, Transport, TransportState, natural_cmp,
+    FLAG_COLORS, FLAG_NAMES, FileExplorer, MenuResult, MenuState, SourceMode, Transport, TransportState,
+    format_quality_score, natural_cmp,
 };
 
 struct TempDirGuard(PathBuf);
@@ -330,4 +331,39 @@ mod measures_plot {
         let (lo, hi) = value_range(&[series(vec![2.0, 2.0])]).unwrap();
         assert!(lo < 2.0 && hi > 2.0);
     }
+}
+
+#[test]
+fn test_format_quality_score_rounds_and_clamps() {
+    assert_eq!(format_quality_score(0.9545), "0.95");
+    assert_eq!(format_quality_score(1.0), "1.00");
+    assert_eq!(format_quality_score(1.2), "1.00");
+    assert_eq!(format_quality_score(-0.1), "0.00");
+}
+
+#[test]
+fn test_scan_root_attaches_quality_score_to_trial_files_only() {
+    let dir = TempDirGuard::new("quality_scan");
+    let root = dir.path();
+    fs::write(
+        root.join("a__30fps__p1.hexport"),
+        common::generate_synthetic_hexport_with_quality("S1", "T1", Some(0.8)),
+    )
+    .unwrap();
+    fs::write(
+        root.join("b__30fps__p2.hexport"),
+        common::generate_synthetic_hexport("S1", "T2"),
+    )
+    .unwrap();
+
+    let tree = FileExplorer::scan_root(root);
+    let subject = &tree.children[0];
+    let scores: Vec<_> = subject
+        .children
+        .iter()
+        .map(|c| (c.name.as_str(), c.quality_score))
+        .collect();
+
+    assert_eq!(subject.quality_score, None);
+    assert_eq!(scores, vec![("T1_30fps", Some(0.8)), ("T2_30fps", None)]);
 }

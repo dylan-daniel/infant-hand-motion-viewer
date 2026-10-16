@@ -15,7 +15,7 @@ pub const FPS_FONT_SIZE: f32 = 22.0;
 // Height of the sequence playback bar pinned to the window bottom.
 pub const PLAYBACK_BAR_HEIGHT: f32 = 56.0;
 
-pub use explorer::{ExplorerResult, FileExplorer, SourceMode, natural_cmp};
+pub use explorer::{ExplorerResult, FileExplorer, SourceMode, format_quality_score, natural_cmp};
 pub use flags::draw_flags_window;
 pub use icons::UiIcons;
 pub use image_view::{ImageViewResult, draw_image_window};
