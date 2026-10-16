@@ -289,6 +289,7 @@ impl FileExplorer {
             is_file: false,
             children: Vec::new(),
             default_open: true,
+            quality_score: None,
         };
 
         let mut subdirs = Vec::new();
@@ -337,6 +338,7 @@ impl FileExplorer {
             path: String,
             display_name: String,
             params_tag: String,
+            quality_score: Option<f32>,
         }
 
         let mut subject_groups: BTreeMap<String, Vec<FileEntry>> = BTreeMap::new();
@@ -351,7 +353,12 @@ impl FileExplorer {
             let fps_tag = if parts.len() >= 2 { parts[1] } else { "" };
             let params_tag = if parts.len() >= 3 { parts[2] } else { "" };
 
-            if let Some(HexportMetadata { subject, trial, .. }) = read_hexport_metadata(path) {
+            if let Some(HexportMetadata {
+                subject,
+                trial,
+                quality_score,
+            }) = read_hexport_metadata(path)
+            {
                 let display_name = if !fps_tag.is_empty() {
                     format!("{trial}_{fps_tag}")
                 } else {
@@ -361,6 +368,7 @@ impl FileExplorer {
                     path: path.to_string_lossy().into_owned(),
                     display_name,
                     params_tag: params_tag.to_string(),
+                    quality_score,
                 });
             } else {
                 unclassified.push(ExplorerNode {
@@ -369,6 +377,7 @@ impl FileExplorer {
                     is_file: true,
                     children: Vec::new(),
                     default_open: false,
+                    quality_score: None,
                 });
             }
         }
@@ -395,6 +404,7 @@ impl FileExplorer {
                     is_file: true,
                     children: Vec::new(),
                     default_open: false,
+                    quality_score: entry.quality_score,
                 });
             }
 
@@ -406,6 +416,7 @@ impl FileExplorer {
                 is_file: false,
                 children: subject_children,
                 default_open: false,
+                quality_score: None,
             });
         }
 

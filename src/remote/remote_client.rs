@@ -92,6 +92,9 @@ pub struct ExplorerNode {
     pub children: Vec<ExplorerNode>,
     #[serde(default)]
     pub default_open: bool,
+    /// Trial quality score (0-1) shown beside trial files; None when unknown.
+    #[serde(default)]
+    pub quality_score: Option<f32>,
 }
 
 /// A trial's source video as downloaded from the remote.

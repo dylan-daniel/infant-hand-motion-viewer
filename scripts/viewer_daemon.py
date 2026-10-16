@@ -13,6 +13,7 @@ Protocol:
 
 import hashlib
 import json
+import math
 import os
 import re
 import struct
@@ -27,59 +28,69 @@ def natural_sort_key(s: str):
     return [int(text) if text.isdigit() else text.lower() for text in re.split(r"(\d+)", s)]
 
 
+def read_quality_score(payload: bytes, col_offsets: dict, dtypes: dict):
+    """First-row quality_trial_score (the same on every row of a trial); None when absent, NaN or out of bounds."""
+    offset = col_offsets.get("quality_trial_score")
+    if offset is None or dtypes["quality_trial_score"] != 0 or offset + 4 > len(payload):
+        return None
+    score = struct.unpack("<f", payload[offset:offset + 4])[0]
+    return None if math.isnan(score) else score
+
+
 def read_hexport_metadata(path: str):
-    """Quickly read subject and trial from a .hexport binary file."""
+    """Quickly read subject, trial and trial quality score (None if absent or NaN) from a .hexport binary file."""
     try:
         with open(path, "rb") as fp:
             header = fp.read(16)
             if len(header) < 16 or header[:4] != b"HEXP":
-                return None, None
+                return None, None, None
             version, payload_size, compressed_size = struct.unpack("<III", header[4:16])
             if version != 1 or payload_size == 0 or compressed_size == 0:
-                return None, None
+                return None, None, None
             compressed = fp.read(compressed_size)
             if len(compressed) < compressed_size:
-                return None, None
+                return None, None, None
         payload = zlib.decompress(compressed)
         if len(payload) < 8:
-            return None, None
+            return None, None, None
         row_count, column_count = struct.unpack("<II", payload[:8])
         if row_count == 0:
-            return None, None
+            return None, None, None
         offset = 8
         ordered_cols = []
         for _ in range(column_count):
             if offset + 2 > len(payload):
-                return None, None
+                return None, None, None
             name_len = payload[offset]
             offset += 1
             dtype = payload[offset]
             offset += 1
             if offset + name_len > len(payload):
-                return None, None
+                return None, None, None
             name = payload[offset:offset + name_len].decode("ascii", errors="replace")
             offset += name_len
             ordered_cols.append((name, dtype))
 
         col_offsets = {}
+        dtypes = dict(ordered_cols)
         for name, dtype in ordered_cols:
             col_offsets[name] = offset
             item_sz = 4 if dtype in (0, 1) else (1 if dtype == 2 else 32)
             offset += item_sz * row_count
 
         if "subject" not in col_offsets or "trial" not in col_offsets:
-            return None, None
+            return None, None, None
 
         subj_off = col_offsets["subject"]
         trial_off = col_offsets["trial"]
         if subj_off + 32 > len(payload) or trial_off + 32 > len(payload):
-            return None, None
+            return None, None, None
 
         subject = payload[subj_off:subj_off + 32].split(b"\x00")[0].decode("ascii", errors="replace").strip()
         trial = payload[trial_off:trial_off + 32].split(b"\x00")[0].decode("ascii", errors="replace").strip()
-        return subject, trial
+        return subject, trial, read_quality_score(payload, col_offsets, dtypes)
     except Exception:
-        return None, None
+        return None, None, None
 
 
 def _disambiguate_names(files_list):
@@ -126,7 +137,7 @@ def scan_tree(root_path_str: str):
             unclassified = []
 
             for entry in hexport_entries:
-                subject, trial = read_hexport_metadata(entry.path)
+                subject, trial, quality_score = read_hexport_metadata(entry.path)
                 stem = Path(entry.name).stem
                 parts = stem.split("__")
                 fps_tag = parts[1] if len(parts) >= 2 else ""
@@ -140,6 +151,7 @@ def scan_tree(root_path_str: str):
                         "is_file": True,
                         "children": [],
                         "params": params_tag,
+                        "quality_score": quality_score,
                     })
                 else:
                     unclassified.append({
