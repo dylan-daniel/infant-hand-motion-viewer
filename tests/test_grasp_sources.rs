@@ -74,5 +74,6 @@ fn the_source_list_is_saved_in_the_config() {
     assert_eq!(Config::load(&path).grasp_event_sources, cfg.grasp_event_sources);
     assert!(Config::default().grasp_event_sources.is_empty());
     assert!(!Config::default().hide_unused_hands);
+    assert!(!Config::default().pause_at_events);
     let _ = fs::remove_dir_all(&dir);
 }

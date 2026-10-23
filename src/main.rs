@@ -20,7 +20,7 @@ use dear_imgui_winit::{HiDpiMode, WinitPlatform};
 use infant_hand_motion_viewer::assets;
 use infant_hand_motion_viewer::config::Config;
 use infant_hand_motion_viewer::data::{
-    GraspEventSet, GraspMark, HandData, MeshSequence, Transform, compute_transform, reference_depth,
+    GraspEventSet, GraspMark, HandData, MeshSequence, Transform, compute_transform, next_event_frame, reference_depth,
 };
 use infant_hand_motion_viewer::graphics::{
     Camera, FrameGpu, Framebuffer, FreeCamera, Gpu, HandOverlay, ImageTexture, OrbitCamera, Renderer, SceneRender,
@@ -1060,7 +1060,21 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             let step = (state.playback_accumulator * PLAYBACK_FPS * state.playback_speed as f64) as usize;
             if step > 0 {
                 state.playback_accumulator -= (step as f64) / (PLAYBACK_FPS * state.playback_speed as f64);
-                state.current_frame = (state.current_frame + step) % frame_count;
+                let from = state.current_frame;
+                let stop = state
+                    .settings
+                    .pause_at_events
+                    .then(|| {
+                        let marks = open_trial_marks(&state.grasp_set, seq, state.video.as_deref());
+                        next_event_frame(&marks, from, (from + step).min(frame_count - 1))
+                    })
+                    .flatten();
+                if let Some(frame) = stop {
+                    state.current_frame = frame;
+                    state.playing = false;
+                } else {
+                    state.current_frame = (from + step) % frame_count;
+                }
             }
         } else {
             state.playback_accumulator = 0.0;
@@ -1189,10 +1203,9 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         let meta = seq.meta();
         state.grasp_set.row(&meta.subject, &meta.trial)
     });
-    let grasp_fps = state.video.as_ref().and_then(|video| video.fps());
-    let grasp_marks: Vec<GraspMark> = match (grasp_row, grasp_fps) {
-        (Some(row), Some(fps)) => row.marks(fps, frame_count),
-        _ => Vec::new(),
+    let grasp_marks = match &state.sequence {
+        Some(seq) => open_trial_marks(&state.grasp_set, seq, state.video.as_deref()),
+        None => Vec::new(),
     };
 
     let key_explorer = WindowKey::new("Explorer", "Explorer").expect("explorer key");
@@ -1345,6 +1358,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             "Grasp###Grasp",
             grasp_state,
             &mut state.settings.hide_unused_hands,
+            &mut state.settings.pause_at_events,
             None,
         );
 
@@ -1656,6 +1670,18 @@ fn hidden_hands(grasp: &GraspEventSet, seq: &MeshSequence, hide_unused: bool) ->
     match grasp.row(&meta.subject, &meta.trial) {
         Some(row) if hide_unused => row.unused_sides(),
         _ => (false, false),
+    }
+}
+
+/// The open trial's grasp events placed on its frames; empty without a CSV row or a known video frame rate.
+fn open_trial_marks(grasp: &GraspEventSet, seq: &MeshSequence, video: Option<&FrameStore>) -> Vec<GraspMark> {
+    let meta = seq.meta();
+    match (
+        grasp.row(&meta.subject, &meta.trial),
+        video.and_then(|video| video.fps()),
+    ) {
+        (Some(row), Some(fps)) => row.marks(fps, seq.frame_count()),
+        _ => Vec::new(),
     }
 }
 

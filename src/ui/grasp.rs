@@ -164,6 +164,7 @@ pub fn draw_grasp_window(
     title: &str,
     state: GraspPaneState<'_>,
     hide_unused_hands: &mut bool,
+    pause_at_events: &mut bool,
     dock_id: Option<Id>,
 ) {
     if let Some(did) = dock_id {
@@ -206,6 +207,7 @@ pub fn draw_grasp_window(
             }
             ui.separator();
             ui.checkbox("Hide unused hands", hide_unused_hands);
+            ui.checkbox("Pause at events", pause_at_events);
             for (label, hand) in [("Left", &row.left), ("Right", &row.right)] {
                 if !*hide_unused_hands || hand.used == Some(true) {
                     draw_hand(ui, label, hand);

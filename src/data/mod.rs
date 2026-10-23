@@ -13,6 +13,7 @@ pub use geometry::{
 };
 pub use grasp_events::{
     Certainty, GraspEvent, GraspEventKind, GraspEventSet, GraspEventsError, GraspFile, GraspMark, GraspRow, HandGrip,
+    next_event_frame,
 };
 pub use hand_export::{
     HandExportError, HandExportRow, HandVariant, HexportMetadata, MEASURE_COLUMNS, MEASURE_COUNT, ManoParams,

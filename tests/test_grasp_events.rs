@@ -152,3 +152,16 @@ fn unused_sides_are_those_not_marked_true() {
     assert_eq!(sides("T3"), (true, true));
     assert_eq!(sides("T4"), (false, false));
 }
+
+#[test]
+fn playback_stops_at_the_first_event_it_reaches() {
+    use infant_hand_motion_viewer::data::next_event_frame;
+    let file = parse("A,T1,,,,,3.0,,1.0,,2.0,\n").unwrap();
+    let marks = file.row("A", "T1").unwrap().marks(30.0, 200);
+    assert_eq!(next_event_frame(&marks, 0, 100), Some(30));
+    assert_eq!(next_event_frame(&marks, 30, 100), Some(60));
+    assert_eq!(next_event_frame(&marks, 29, 30), Some(30));
+    assert_eq!(next_event_frame(&marks, 30, 59), None);
+    assert_eq!(next_event_frame(&marks, 90, 199), None);
+    assert_eq!(next_event_frame(&[], 0, 10), None);
+}

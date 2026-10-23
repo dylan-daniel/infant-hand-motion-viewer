@@ -103,6 +103,9 @@ pub struct Config {
     /// Grasp pane: hide the hands the CSV does not mark as used.
     #[serde(default)]
     pub hide_unused_hands: bool,
+    /// Playback stops on each grasp event it reaches.
+    #[serde(default)]
+    pub pause_at_events: bool,
     #[serde(default = "default_true")]
     pub free_camera: bool,
     #[serde(default)]
@@ -179,6 +182,7 @@ impl Default for Config {
             remote_video_roots: Vec::new(),
             grasp_event_sources: Vec::new(),
             hide_unused_hands: false,
+            pause_at_events: false,
             free_camera: default_true(),
             active_pane: 0,
             flag_layers_enabled: default_flag_layers(),

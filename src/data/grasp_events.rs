@@ -111,6 +111,15 @@ pub struct GraspMark {
     pub certainty: Option<Certainty>,
 }
 
+/// The first event frame after `from` and up to `to` (inclusive), where playback stepping from `from` to `to` should stop.
+pub fn next_event_frame(marks: &[GraspMark], from: usize, to: usize) -> Option<usize> {
+    marks
+        .iter()
+        .map(|mark| mark.frame)
+        .filter(|&frame| frame > from && frame <= to)
+        .min()
+}
+
 /// One trial's row of a grasp-events CSV.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct GraspRow {
