@@ -377,6 +377,10 @@ fn test_scan_root_attaches_quality_score_to_trial_files_only() {
         .collect();
 
     assert_eq!((subject.quality_score_left, subject.quality_score_right), (None, None));
+    assert_eq!(
+        (subject.children[0].subject.as_str(), subject.children[0].trial.as_str()),
+        ("S1", "T1")
+    );
     assert_eq!(scores, vec![("T1_30fps", Some(0.8), None), ("T2_30fps", None, None)]);
 }
 

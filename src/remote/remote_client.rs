@@ -100,6 +100,11 @@ pub struct ExplorerNode {
     /// As `quality_score_left`, for the right infant hand.
     #[serde(default)]
     pub quality_score_right: Option<f32>,
+    /// Subject and trial of a trial file, to look it up in the grasp CSV; empty for folders.
+    #[serde(default)]
+    pub subject: String,
+    #[serde(default)]
+    pub trial: String,
 }
 
 /// What the remote answered when asked for a file the client may already hold.

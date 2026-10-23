@@ -132,6 +132,8 @@ def scan_tree(root_path_str: str):
                         "params": params_tag,
                         "quality_score_left": score_left,
                         "quality_score_right": score_right,
+                        "subject": subject,
+                        "trial": trial,
                     })
                 else:
                     unclassified.append({

@@ -1383,7 +1383,12 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             None,
         );
 
-        let explorer_result = state.explorer.draw_explorer_window(ui, &state.icons, None);
+        let explorer_result = state.explorer.draw_explorer_window(
+            ui,
+            &state.icons,
+            state.settings.hide_unused_hands.then_some(&state.grasp_set),
+            None,
+        );
 
         let roots_result = draw_video_roots_modal(
             ui,
