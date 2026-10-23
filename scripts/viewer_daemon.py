@@ -3,12 +3,15 @@
 Lightweight server-side daemon for Infant Hand Motion Viewer.
 Communicates via standard input/output with the remote desktop viewer.
 
-Protocol:
+Protocol (requests are served concurrently and their responses interleave, matched up by "id"):
 - Requests arrive as JSON lines on stdin: {"id": <int>, "cmd": "<command>", ...}
 - Text responses are written as JSON lines on stdout: {"id": <int>, "status": "ok"|"error", ...}\n
 - Binary responses (get_file, get_video) write a JSON header line:
     {"id": <int>, "status": "ok", "size": <byte_length>, ...}\n
-  followed immediately by exactly <byte_length> raw bytes.
+  followed by the payload in chunk frames, each a JSON line {"id": <int>, "chunk": <n>}\n and then n raw bytes,
+  until <byte_length> bytes have been sent. At most WINDOW_CHUNKS chunks of a response are in flight: the client
+  sends {"cmd": "ack", "id": <int>} for every chunk it has taken, which frees the daemon to send another. That keeps
+  a large download from queueing up in front of the small replies of other requests.
 """
 
 import hashlib
@@ -18,6 +21,7 @@ import os
 import re
 import struct
 import sys
+import threading
 import traceback
 from pathlib import Path
 
@@ -182,10 +186,76 @@ def handle_scan_tree(req):
     return {"status": "ok", "tree": tree}
 
 
-def handle_get_file(req, out):
+CHUNK_SIZE = 128 * 1024
+WINDOW_CHUNKS = 8
+ACK_WAIT_SECONDS = 120
+
+
+class Replier:
+    """Writes responses to stdout one whole frame at a time, so replies from concurrent requests interleave."""
+
+    def __init__(self, out):
+        self.out = out
+        self.lock = threading.Lock()
+        self.windows = {}
+        self.windows_lock = threading.Lock()
+
+    def json(self, obj):
+        line = (json.dumps(obj) + "\n").encode("utf-8")
+        with self.lock:
+            self.out.write(line)
+            self.out.flush()
+
+    def payload(self, req_id, header, chunks):
+        """Send `header` (which carries the total "size") and then the chunks, at most WINDOW_CHUNKS unacknowledged."""
+        window = threading.Semaphore(WINDOW_CHUNKS)
+        with self.windows_lock:
+            self.windows[req_id] = window
+        try:
+            self.json(header)
+            try:
+                for chunk in chunks:
+                    if not window.acquire(timeout=ACK_WAIT_SECONDS):
+                        return  # the client stopped acknowledging; it is gone
+                    frame = (json.dumps({"id": req_id, "chunk": len(chunk)}) + "\n").encode("utf-8")
+                    with self.lock:
+                        self.out.write(frame)
+                        self.out.write(chunk)
+                        self.out.flush()
+            except OSError as e:
+                # The header promised more bytes than will come, so the client has to be told
+                self.json({"id": req_id, "status": "error", "message": f"Failed while sending: {e}"})
+        finally:
+            with self.windows_lock:
+                self.windows.pop(req_id, None)
+
+    def ack(self, req_id):
+        with self.windows_lock:
+            window = self.windows.get(req_id)
+        if window:
+            window.release()
+
+
+def chunks_of_bytes(data):
+    for start in range(0, len(data), CHUNK_SIZE):
+        yield data[start:start + CHUNK_SIZE]
+
+
+def chunks_of_file(path, size):
+    with open(path, "rb") as f:
+        remaining = size
+        while remaining > 0:
+            chunk = f.read(min(CHUNK_SIZE, remaining))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            yield chunk
+
+
+def handle_get_file(req, reply):
     path_str = os.path.expanduser(req.get("path", ""))
     if not os.path.isfile(path_str):
-        write_json_line(out, {"id": req["id"], "status": "error", "message": f"File not found: {path_str}"})
+        reply.json({"id": req["id"], "status": "error", "message": f"File not found: {path_str}"})
         return
 
     try:
@@ -193,15 +263,15 @@ def handle_get_file(req, out):
         digest = hash_cache().hash_of(path_str, st.st_size, st.st_mtime_ns)
         hash_cache().save()
         if req.get("if_none_match") == digest:
-            write_json_line(out, {"id": req["id"], "status": "not_modified", "hash": digest})
+            reply.json({"id": req["id"], "status": "not_modified", "hash": digest})
             return
         with open(path_str, "rb") as f:
             data = f.read()
-        write_json_line(out, {"id": req["id"], "status": "ok", "size": len(data), "hash": digest})
-        out.write(data)
-        out.flush()
+        reply.payload(
+            req["id"], {"id": req["id"], "status": "ok", "size": len(data), "hash": digest}, chunks_of_bytes(data)
+        )
     except Exception as e:
-        write_json_line(out, {"id": req["id"], "status": "error", "message": str(e)})
+        reply.json({"id": req["id"], "status": "error", "message": str(e)})
 
 
 VIDEO_EXTENSIONS = (".mp4", ".m4v", ".mov", ".mkv", ".avi", ".webm")
@@ -223,6 +293,7 @@ class HashCache:
         self.path = Path(path)
         self.entries = {}
         self.dirty = False
+        self.lock = threading.Lock()
         try:
             with open(self.path, encoding="utf-8") as f:
                 self.entries = json.load(f)
@@ -240,33 +311,37 @@ class HashCache:
         if cached:
             return cached
         digest = sha256_file(file_path)
-        self.entries[file_path] = [size, mtime_ns, digest]
-        self.dirty = True
+        with self.lock:
+            self.entries[file_path] = [size, mtime_ns, digest]
+            self.dirty = True
         return digest
 
     def save(self):
-        if not self.dirty:
-            return
-        try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.path.with_suffix(".tmp")
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(self.entries, f)
-            os.replace(tmp, self.path)
-            self.dirty = False
-        except OSError:
-            pass
+        with self.lock:
+            if not self.dirty:
+                return
+            try:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                tmp = self.path.with_suffix(".tmp")
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(self.entries, f)
+                os.replace(tmp, self.path)
+                self.dirty = False
+            except OSError:
+                pass
 
 
 _hash_cache = None
+_hash_cache_lock = threading.Lock()
 _found_videos = {}
 
 
 def hash_cache():
     global _hash_cache
-    if _hash_cache is None:
-        _hash_cache = HashCache(HASH_CACHE_PATH)
-    return _hash_cache
+    with _hash_cache_lock:
+        if _hash_cache is None:
+            _hash_cache = HashCache(HASH_CACHE_PATH)
+        return _hash_cache
 
 
 def list_video_files(roots):
@@ -337,19 +412,19 @@ def debug_video_path(kind: str, source: Path):
     return DEBUG_VIDEO_ROOT / "sam3_render" / subject / f"{trial}.mp4"
 
 
-def handle_get_video(req, out):
+def handle_get_video(req, reply):
     export_path_str = os.path.expanduser(req.get("path") or req.get("export_path", ""))
     meta = read_hexport_header(export_path_str)
     video_hash = (meta or {}).get("video_hash") or ""
     basename = (meta or {}).get("video_basename")
     if not meta or not video_hash:
-        write_json_line(out, {"id": req["id"], "status": "error", "message": f"Not a version 3 hand export: {export_path_str}"})
+        reply.json({"id": req["id"], "status": "error", "message": f"Not a version 3 hand export: {export_path_str}"})
         return
     size = meta.get("video_size_bytes")
     roots = [r for r in req.get("roots") or [] if isinstance(r, str) and r.strip()]
     video = find_video_by_hash(video_hash, roots, basename, size if isinstance(size, int) else None)
     if not video:
-        write_json_line(out, {
+        reply.json({
             "id": req["id"], "status": "not_found", "video_hash": video_hash, "video_basename": basename,
         })
         return
@@ -358,41 +433,44 @@ def handle_get_video(req, out):
     if kind in DEBUG_VIDEO_PREFIX:
         video = debug_video_path(kind, video)
         if not video.exists():
-            write_json_line(out, {"id": req["id"], "status": "not_found", "video_hash": video_hash, "video_basename": basename})
+            reply.json({"id": req["id"], "status": "not_found", "video_hash": video_hash, "video_basename": basename})
             return
         video_hash = DEBUG_VIDEO_PREFIX[kind] + video_hash[2:]
     try:
         resolved = video.resolve()
         size = resolved.stat().st_size
-        write_json_line(out, {
-            "id": req["id"],
-            "status": "ok",
-            "size": size,
-            "filename": video.name,
-            "video_hash": video_hash,
-        })
-        with open(resolved, "rb") as f:
-            remaining = size
-            while remaining > 0:
-                chunk = f.read(min(1 << 20, remaining))
-                if not chunk:
-                    break
-                out.write(chunk)
-                remaining -= len(chunk)
-        out.flush()
+        reply.payload(
+            req["id"],
+            {"id": req["id"], "status": "ok", "size": size, "filename": video.name, "video_hash": video_hash},
+            chunks_of_file(resolved, size),
+        )
     except Exception as e:
-        write_json_line(out, {"id": req["id"], "status": "error", "message": str(e)})
+        reply.json({"id": req["id"], "status": "error", "message": str(e)})
 
 
-def write_json_line(out, obj):
-    line = json.dumps(obj) + "\n"
-    out.write(line.encode("utf-8"))
-    out.flush()
+def serve(req, reply):
+    """Answer one request; runs on its own thread so a slow request does not hold up the others."""
+    req_id = req.get("id", 0)
+    cmd = req.get("cmd", "")
+    try:
+        if cmd == "scan_tree":
+            res = handle_scan_tree(req)
+            res["id"] = req_id
+            reply.json(res)
+        elif cmd == "get_file":
+            handle_get_file(req, reply)
+        elif cmd == "get_video":
+            handle_get_video(req, reply)
+        else:
+            reply.json({"id": req_id, "status": "error", "message": f"Unknown command: {cmd}"})
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        reply.json({"id": req_id, "status": "error", "message": str(e)})
 
 
 def main():
     stdin = sys.stdin
-    stdout = sys.stdout.buffer
+    reply = Replier(sys.stdout.buffer)
 
     # Optional handshake banner to verify connection
     sys.stderr.write("infant_hand_motion_viewer daemon started\n")
@@ -405,31 +483,20 @@ def main():
         try:
             req = json.loads(line)
         except Exception as e:
-            write_json_line(stdout, {"status": "error", "message": f"Invalid JSON: {e}"})
+            reply.json({"status": "error", "message": f"Invalid JSON: {e}"})
             continue
 
         req_id = req.get("id", 0)
         cmd = req.get("cmd", "")
-
-        try:
-            if cmd == "ping":
-                write_json_line(stdout, {"id": req_id, "status": "ok", "version": 1})
-            elif cmd == "scan_tree":
-                res = handle_scan_tree(req)
-                res["id"] = req_id
-                write_json_line(stdout, res)
-            elif cmd == "get_file":
-                handle_get_file(req, stdout)
-            elif cmd == "get_video":
-                handle_get_video(req, stdout)
-            elif cmd == "quit" or cmd == "exit":
-                write_json_line(stdout, {"id": req_id, "status": "ok"})
-                break
-            else:
-                write_json_line(stdout, {"id": req_id, "status": "error", "message": f"Unknown command: {cmd}"})
-        except Exception as e:
-            traceback.print_exc(file=sys.stderr)
-            write_json_line(stdout, {"id": req_id, "status": "error", "message": str(e)})
+        if cmd == "ack":
+            reply.ack(req_id)
+        elif cmd == "ping":
+            reply.json({"id": req_id, "status": "ok", "version": 2})
+        elif cmd == "quit" or cmd == "exit":
+            reply.json({"id": req_id, "status": "ok"})
+            break
+        else:
+            threading.Thread(target=serve, args=(req, reply), daemon=True).start()
 
 
 if __name__ == "__main__":

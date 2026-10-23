@@ -6,7 +6,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicU32, Ordering},
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use infant_hand_motion_viewer::cache::DiskCache;
 use infant_hand_motion_viewer::remote::{
@@ -37,6 +37,42 @@ impl Drop for TempDirGuard {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
     }
+}
+
+/// Keeps the daemons these tests start from writing their file-hash memory into the user's real cache.
+fn isolate_hash_cache() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let path = std::env::temp_dir().join(format!("viewer_test_hashes_{}.json", std::process::id()));
+        // SAFETY: runs once, before any test in this file starts a daemon.
+        unsafe { std::env::set_var("VIEWER_HASH_CACHE", path) };
+    });
+}
+
+fn local_client() -> RemoteClient {
+    isolate_hash_cache();
+    let client = RemoteClient::new();
+    client
+        .connect_sync(&RemoteConfig {
+            host: "localhost".to_string(),
+            port: 22,
+            python_bin: "python3".to_string(),
+            root_folder: String::new(),
+        })
+        .expect("local daemon");
+    client
+}
+
+/// `len` bytes that differ from offset to offset, so a misplaced or repeated chunk shows up.
+fn patterned(len: usize, seed: u8) -> Vec<u8> {
+    (0..len)
+        .map(|i| {
+            (i as u8)
+                .wrapping_mul(31)
+                .wrapping_add((i >> 8) as u8)
+                .wrapping_add(seed)
+        })
+        .collect()
 }
 
 #[test]
@@ -70,8 +106,7 @@ fn test_remote_client_local_daemon_e2e() {
     fs::create_dir_all(&trial_dir).unwrap();
     let video_bytes = b"not really an mp4".to_vec();
     let video_hash = sha256_hex(&video_bytes);
-    // SAFETY: only this test starts the daemon, and nothing else reads the variable.
-    unsafe { std::env::set_var("VIEWER_HASH_CACHE", temp_workspace.path().join("hashes.json")) };
+    isolate_hash_cache();
 
     let hexport_path = trial_dir.join("motion__30fps__hash.hexport");
     let synthetic_bytes = common::generate_synthetic_hexport_with_meta(
@@ -203,4 +238,164 @@ fn test_remote_client_local_daemon_e2e() {
     client.disconnect();
     assert_eq!(client.state(), ConnectionState::Disconnected);
     assert!(!client.is_connected());
+}
+
+#[test]
+fn files_arrive_intact_through_the_chunked_transfer() {
+    let dir = TempDirGuard::new("test_remote_chunks");
+    let client = local_client();
+    let chunk = 128 * 1024;
+    for (name, len) in [
+        ("empty", 0),
+        ("tiny", 1),
+        ("one_chunk", chunk),
+        ("chunk_plus_one", chunk + 1),
+        ("whole_window", chunk * 8),
+        ("many", chunk * 8 * 3 + 12345),
+    ] {
+        let path = dir.path().join(name);
+        let bytes = patterned(len, 7);
+        fs::write(&path, &bytes).unwrap();
+        assert_eq!(
+            client.fetch_file_bytes(&path.to_string_lossy()).unwrap(),
+            bytes,
+            "{name}"
+        );
+    }
+    client.disconnect();
+}
+
+#[test]
+fn simultaneous_downloads_do_not_mix_their_bytes() {
+    let dir = TempDirGuard::new("test_remote_concurrent");
+    let client = local_client();
+    let files: Vec<_> = (0..4u8)
+        .map(|i| {
+            let path = dir.path().join(format!("file{i}"));
+            let bytes = patterned(3_000_000 + usize::from(i) * 77_777, i * 40);
+            fs::write(&path, &bytes).unwrap();
+            (path, bytes)
+        })
+        .collect();
+    let handles: Vec<_> = files
+        .iter()
+        .map(|(path, _)| {
+            let client = client.clone();
+            let path = path.to_string_lossy().into_owned();
+            std::thread::spawn(move || client.fetch_file_bytes(&path))
+        })
+        .collect();
+    for (handle, (_, expected)) in handles.into_iter().zip(&files) {
+        assert_eq!(&handle.join().unwrap().unwrap(), expected);
+    }
+    client.disconnect();
+}
+
+#[test]
+fn small_requests_stay_quick_during_a_large_download() {
+    let dir = TempDirGuard::new("test_remote_download_ping");
+    let client = local_client();
+    let big = dir.path().join("big.bin");
+    fs::File::create(&big).unwrap().set_len(192 << 20).unwrap();
+    let path = big.to_string_lossy().into_owned();
+    let download = {
+        let client = client.clone();
+        std::thread::spawn(move || client.fetch_file_bytes(&path).map(|bytes| bytes.len()))
+    };
+    std::thread::sleep(Duration::from_millis(150));
+    let mut slowest = Duration::ZERO;
+    let mut overlapped = 0;
+    for _ in 0..5 {
+        let start = Instant::now();
+        client.ping().unwrap();
+        slowest = slowest.max(start.elapsed());
+        if !download.is_finished() {
+            overlapped += 1;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(overlapped > 0, "the download finished before any ping could overlap it");
+    assert!(
+        slowest < Duration::from_millis(300),
+        "a ping took {slowest:?} during the download"
+    );
+    assert_eq!(download.join().unwrap().unwrap(), 192 << 20);
+    client.disconnect();
+}
+
+#[test]
+fn a_slow_video_search_does_not_hold_up_other_requests() {
+    let dir = TempDirGuard::new("test_remote_slow_search");
+    let client = local_client();
+    let videos = dir.path().join("videos");
+    fs::create_dir_all(&videos).unwrap();
+    // 1 GB of zeros (sparse on disk) that the daemon has to hash before concluding the video is not there
+    fs::File::create(videos.join("big.mp4"))
+        .unwrap()
+        .set_len(1 << 30)
+        .unwrap();
+    let export = dir.path().join("trial.hexport");
+    fs::write(
+        &export,
+        common::generate_synthetic_hexport_with_meta("S", "T", serde_json::json!({ "video_hash": "ab".repeat(32) })),
+    )
+    .unwrap();
+    let export_path = export.to_string_lossy().into_owned();
+    let roots = vec![videos.to_string_lossy().into_owned()];
+    let search = {
+        let client = client.clone();
+        std::thread::spawn(move || client.fetch_video(&export_path, None, &roots))
+    };
+    std::thread::sleep(Duration::from_millis(150));
+    assert!(!search.is_finished(), "the search should still be hashing");
+
+    let start = Instant::now();
+    client.ping().unwrap();
+    client.scan_tree(&dir.path().to_string_lossy()).unwrap();
+    assert!(
+        start.elapsed() < Duration::from_millis(400),
+        "requests waited {:?} behind the video search",
+        start.elapsed()
+    );
+    assert!(!search.is_finished(), "the requests must have run during the search");
+    assert!(matches!(
+        search.join().unwrap().unwrap(),
+        RemoteVideoReply::Missing { .. }
+    ));
+    client.disconnect();
+}
+
+#[test]
+fn requests_fail_instead_of_hanging_when_the_connection_goes_away() {
+    let dir = TempDirGuard::new("test_remote_disconnect");
+    let client = local_client();
+    let videos = dir.path().join("videos");
+    fs::create_dir_all(&videos).unwrap();
+    fs::File::create(videos.join("big.mp4"))
+        .unwrap()
+        .set_len(1 << 30)
+        .unwrap();
+    let export = dir.path().join("trial.hexport");
+    fs::write(
+        &export,
+        common::generate_synthetic_hexport_with_meta("S", "T", serde_json::json!({ "video_hash": "cd".repeat(32) })),
+    )
+    .unwrap();
+    let export_path = export.to_string_lossy().into_owned();
+    let roots = vec![videos.to_string_lossy().into_owned()];
+    let (tx, rx) = std::sync::mpsc::channel();
+    {
+        let client = client.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(client.fetch_video(&export_path, None, &roots));
+        });
+    }
+    std::thread::sleep(Duration::from_millis(150));
+    client.disconnect();
+    let result = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the waiting request must be released when the connection is closed");
+    assert!(result.is_err());
+    assert!(client.ping().is_err());
+    assert!(client.fetch_file_bytes("/anything").is_err());
 }

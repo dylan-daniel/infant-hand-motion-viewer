@@ -1,7 +1,7 @@
 use std::fs;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufReader, Write};
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::{
     Arc, Mutex, RwLock,
     atomic::{AtomicBool, AtomicU8, Ordering},
@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::assets;
 use crate::util::WorkerQueue;
+
+use super::mux::Mux;
 
 const DAEMON_FILE_NAME: &str = "viewer_daemon.py";
 const REMOTE_DAEMON_DIR: &str = ".infant-hand-motion-viewer";
@@ -129,11 +131,9 @@ pub struct RemoteVideo {
     pub bytes: Vec<u8>,
 }
 
-struct ChildSession {
+struct Session {
     child: Child,
-    stdin: ChildStdin,
-    reader: BufReader<ChildStdout>,
-    next_id: u64,
+    mux: Arc<Mux>,
 }
 
 /// Client managing remote daemon process and communication over SSH or local Python.
@@ -143,7 +143,7 @@ pub struct RemoteClient {
     just_connected: Arc<AtomicBool>,
     config: Arc<RwLock<RemoteConfig>>,
     last_error: Arc<RwLock<String>>,
-    session: Arc<Mutex<Option<ChildSession>>>,
+    session: Arc<Mutex<Option<Session>>>,
     async_worker: Arc<WorkerQueue>,
 }
 
@@ -258,7 +258,11 @@ impl RemoteClient {
             .arg("-o")
             .arg("BatchMode=yes")
             .arg("-o")
-            .arg("ConnectTimeout=10");
+            .arg("ConnectTimeout=10")
+            .arg("-o")
+            .arg("ServerAliveInterval=15")
+            .arg("-o")
+            .arg("ServerAliveCountMax=3");
         if config.port != 22 && config.port > 0 {
             c.arg("-p").arg(config.port.to_string());
         }
@@ -330,7 +334,7 @@ impl RemoteClient {
         cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
 
         let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn process: {e}"))?;
-        let mut stdin = child
+        let stdin = child
             .stdin
             .take()
             .ok_or_else(|| "Failed to obtain process stdin".to_string())?;
@@ -338,64 +342,44 @@ impl RemoteClient {
             .stdout
             .take()
             .ok_or_else(|| "Failed to obtain process stdout".to_string())?;
-        let mut reader = BufReader::new(stdout);
+        let mux = Mux::start(stdin, BufReader::new(stdout));
 
-        let ping_req = serde_json::json!({
-            "id": 1,
-            "cmd": "ping"
-        });
-        let line = format!("{}\n", ping_req);
-        if let Err(e) = stdin.write_all(line.as_bytes()) {
+        let handshake = mux
+            .call(serde_json::json!({ "cmd": "ping" }))
+            .map_err(|e| format!("Connection failed: timed out or error waiting for daemon response: {e}"));
+        let status = match &handshake {
+            Ok((resp, _)) => resp.get("status").and_then(|s| s.as_str()).map(str::to_string),
+            Err(_) => None,
+        };
+        if status.as_deref() != Some("ok") {
+            let message = match handshake {
+                Ok((resp, _)) => resp
+                    .get("message")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("Daemon returned error status on handshake")
+                    .to_string(),
+                Err(e) => e,
+            };
+            mux.shutdown();
             let _ = child.kill();
-            return Err(format!("Connection failed: unable to send handshake to daemon: {e}"));
-        }
-        if let Err(e) = stdin.flush() {
-            let _ = child.kill();
-            return Err(format!("Connection failed: unable to flush handshake to daemon: {e}"));
-        }
-
-        let mut resp_line = String::new();
-        if let Err(e) = reader.read_line(&mut resp_line) {
-            let _ = child.kill();
-            return Err(format!(
-                "Connection failed: timed out or error waiting for daemon response: {e}"
-            ));
-        }
-        if resp_line.trim().is_empty() {
-            let _ = child.kill();
-            return Err("Connection failed: empty response on handshake".to_string());
-        }
-
-        let ping_resp: serde_json::Value = serde_json::from_str(resp_line.trim()).map_err(|e| {
-            let _ = child.kill();
-            format!("Malformed JSON during handshake: {e}")
-        })?;
-
-        if ping_resp.get("status").and_then(|s| s.as_str()) != Some("ok") {
-            let msg = ping_resp
-                .get("message")
-                .and_then(|s| s.as_str())
-                .unwrap_or("Daemon returned error status on handshake");
-            let _ = child.kill();
-            return Err(msg.to_string());
+            let _ = child.wait();
+            return Err(message);
         }
 
         if self.state() != ConnectionState::Connecting {
+            mux.shutdown();
             let _ = child.kill();
+            let _ = child.wait();
             return Err("Connection canceled".to_string());
         }
 
         let mut session_lock = self.session.lock().unwrap();
         if let Some(mut old) = session_lock.take() {
+            old.mux.shutdown();
             let _ = old.child.kill();
             let _ = old.child.wait();
         }
-        *session_lock = Some(ChildSession {
-            child,
-            stdin,
-            reader,
-            next_id: 2,
-        });
+        *session_lock = Some(Session { child, mux });
 
         Ok(())
     }
@@ -405,15 +389,8 @@ impl RemoteClient {
         self.set_state(ConnectionState::Disconnected);
         let mut session_lock = self.session.lock().unwrap();
         if let Some(mut session) = session_lock.take() {
-            let quit_req = serde_json::json!({
-                "id": session.next_id,
-                "cmd": "quit"
-            });
-            session.next_id += 1;
-            let line = format!("{}\n", quit_req);
-            let _ = session.stdin.write_all(line.as_bytes());
-            let _ = session.stdin.flush();
-
+            session.mux.notify(serde_json::json!({ "cmd": "quit" }));
+            session.mux.shutdown();
             let _ = session.child.kill();
             let _ = session.child.wait();
         }
@@ -429,6 +406,14 @@ impl RemoteClient {
             Err(_) => return,
         };
         if let Some(session) = session_lock.as_mut() {
+            if !session.mux.is_alive() {
+                session_lock.take();
+                if let Ok(mut err) = self.last_error.write() {
+                    *err = "Remote server connection closed unexpectedly.".to_string();
+                }
+                self.set_state(ConnectionState::Disconnected);
+                return;
+            }
             match session.child.try_wait() {
                 Ok(Some(_exit_status)) => {
                     session_lock.take();
@@ -449,18 +434,19 @@ impl RemoteClient {
         }
     }
 
+    /// The daemon connection requests go through; the session lock is not held while a request is in flight.
+    fn mux(&self) -> Result<Arc<Mux>, String> {
+        self.session
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|session| Arc::clone(&session.mux))
+            .ok_or_else(|| "Not connected".to_string())
+    }
+
     /// Ping the daemon to ensure connection is live.
     pub fn ping(&self) -> Result<(), String> {
-        let mut lock = self.session.lock().unwrap();
-        let session = lock.as_mut().ok_or_else(|| "Not connected".to_string())?;
-        let req_id = session.next_id;
-        session.next_id += 1;
-
-        let req = serde_json::json!({
-            "id": req_id,
-            "cmd": "ping"
-        });
-        let resp = Self::send_command(session, &req)?;
+        let (resp, _) = self.mux()?.call(serde_json::json!({ "cmd": "ping" }))?;
         if resp.get("status").and_then(|s| s.as_str()) == Some("ok") {
             Ok(())
         } else {
@@ -470,18 +456,10 @@ impl RemoteClient {
 
     /// Scan directory on remote server and build a pruned tree for the explorer pane.
     pub fn scan_tree(&self, remote_root: &str) -> Result<ExplorerNode, String> {
-        let mut lock = self.session.lock().unwrap();
-        let session = lock.as_mut().ok_or_else(|| "Not connected".to_string())?;
-        let req_id = session.next_id;
-        session.next_id += 1;
-
-        let req = serde_json::json!({
-            "id": req_id,
+        let (resp, _) = self.mux()?.call(serde_json::json!({
             "cmd": "scan_tree",
             "root": remote_root,
-        });
-
-        let resp = Self::send_command(session, &req)?;
+        }))?;
         if resp.get("status").and_then(|s| s.as_str()) != Some("ok") {
             let msg = resp
                 .get("message")
@@ -501,20 +479,10 @@ impl RemoteClient {
 
     /// Fetch a remote file (such as a `.hexport` file) into memory.
     pub fn fetch_file_bytes(&self, remote_path: &str) -> Result<Vec<u8>, String> {
-        let (hdr, data) = {
-            let mut lock = self.session.lock().unwrap();
-            let session = lock.as_mut().ok_or_else(|| "Not connected".to_string())?;
-            let req_id = session.next_id;
-            session.next_id += 1;
-
-            let req = serde_json::json!({
-                "id": req_id,
-                "cmd": "get_file",
-                "path": remote_path,
-            });
-
-            Self::send_command_binary(session, &req)?
-        };
+        let (hdr, data) = self.mux()?.call(serde_json::json!({
+            "cmd": "get_file",
+            "path": remote_path,
+        }))?;
 
         if hdr.get("status").and_then(|s| s.as_str()) != Some("ok") {
             let msg = hdr
@@ -528,20 +496,11 @@ impl RemoteClient {
 
     /// Fetch a remote file unless the server's copy still hashes to `known_hash`, in which case no bytes are sent.
     pub fn fetch_file_if_changed(&self, remote_path: &str, known_hash: Option<&str>) -> Result<FileReply, String> {
-        let (hdr, data) = {
-            let mut lock = self.session.lock().unwrap();
-            let session = lock.as_mut().ok_or_else(|| "Not connected".to_string())?;
-            let req_id = session.next_id;
-            session.next_id += 1;
-
-            let req = serde_json::json!({
-                "id": req_id,
-                "cmd": "get_file",
-                "path": remote_path,
-                "if_none_match": known_hash,
-            });
-            Self::send_command_binary(session, &req)?
-        };
+        let (hdr, data) = self.mux()?.call(serde_json::json!({
+            "cmd": "get_file",
+            "path": remote_path,
+            "if_none_match": known_hash,
+        }))?;
 
         let hash = hdr.get("hash").and_then(|h| h.as_str()).unwrap_or_default().to_string();
         match hdr.get("status").and_then(|s| s.as_str()) {
@@ -563,21 +522,12 @@ impl RemoteClient {
         kind: Option<&str>,
         roots: &[String],
     ) -> Result<RemoteVideoReply, String> {
-        let (hdr, bytes) = {
-            let mut lock = self.session.lock().unwrap();
-            let session = lock.as_mut().ok_or_else(|| "Not connected".to_string())?;
-            let req_id = session.next_id;
-            session.next_id += 1;
-
-            let req = serde_json::json!({
-                "id": req_id,
-                "cmd": "get_video",
-                "path": remote_export_path,
-                "kind": kind,
-                "roots": roots,
-            });
-            Self::send_command_binary(session, &req)?
-        };
+        let (hdr, bytes) = self.mux()?.call(serde_json::json!({
+            "cmd": "get_video",
+            "path": remote_export_path,
+            "kind": kind,
+            "roots": roots,
+        }))?;
 
         let text = |key: &str| hdr.get(key).and_then(|s| s.as_str()).unwrap_or_default().to_string();
         match hdr.get("status").and_then(|s| s.as_str()) {
@@ -600,69 +550,6 @@ impl RemoteClient {
 
     fn set_state(&self, s: ConnectionState) {
         self.state.store(state_to_u8(s), Ordering::SeqCst);
-    }
-
-    fn send_command(session: &mut ChildSession, req: &serde_json::Value) -> Result<serde_json::Value, String> {
-        let line = format!("{}\n", req);
-        session
-            .stdin
-            .write_all(line.as_bytes())
-            .map_err(|e| format!("Failed to send request: {e}"))?;
-        session
-            .stdin
-            .flush()
-            .map_err(|e| format!("Failed to flush request: {e}"))?;
-
-        let mut resp_line = String::new();
-        session
-            .reader
-            .read_line(&mut resp_line)
-            .map_err(|e| format!("Failed to read response line: {e}"))?;
-        if resp_line.trim().is_empty() {
-            return Err("Connection closed or empty response".to_string());
-        }
-        serde_json::from_str(resp_line.trim()).map_err(|e| format!("Malformed JSON response: {e}"))
-    }
-
-    fn send_command_binary(
-        session: &mut ChildSession,
-        req: &serde_json::Value,
-    ) -> Result<(serde_json::Value, Vec<u8>), String> {
-        let line = format!("{}\n", req);
-        session
-            .stdin
-            .write_all(line.as_bytes())
-            .map_err(|e| format!("Failed to send request: {e}"))?;
-        session
-            .stdin
-            .flush()
-            .map_err(|e| format!("Failed to flush request: {e}"))?;
-
-        let mut hdr_line = String::new();
-        session
-            .reader
-            .read_line(&mut hdr_line)
-            .map_err(|e| format!("Failed to read header line: {e}"))?;
-        if hdr_line.trim().is_empty() {
-            return Err("Connection closed or empty header response".to_string());
-        }
-        let hdr: serde_json::Value =
-            serde_json::from_str(hdr_line.trim()).map_err(|e| format!("Malformed header JSON: {e}"))?;
-
-        if hdr.get("status").and_then(|s| s.as_str()) != Some("ok") {
-            return Ok((hdr, Vec::new()));
-        }
-
-        let byte_size = hdr.get("size").and_then(|s| s.as_u64()).unwrap_or(0) as usize;
-        let mut data = vec![0u8; byte_size];
-        if byte_size > 0 {
-            session
-                .reader
-                .read_exact(&mut data)
-                .map_err(|e| format!("Failed reading binary payload: {e}"))?;
-        }
-
-        Ok((hdr, data))
     }
 }
 
