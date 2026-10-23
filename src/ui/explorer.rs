@@ -101,6 +101,8 @@ pub struct FileExplorer {
     selected_path: String,
     /// Widest row (icon + name + indent) from the last frame, so the column and scroll range cover it.
     content_width: f32,
+    /// Whether the tree showed a vertical scroll bar last frame, which narrows the room the column has.
+    vertical_scrollbar: bool,
 
     in_flight: Arc<AtomicUsize>,
     latest_scan: Arc<AtomicU64>,
@@ -121,6 +123,7 @@ impl FileExplorer {
             open_state: HashMap::new(),
             selected_path: String::new(),
             content_width: 0.0,
+            vertical_scrollbar: false,
 
             in_flight: Arc::new(AtomicUsize::new(0)),
             latest_scan: Arc::new(AtomicU64::new(0)),
@@ -457,9 +460,15 @@ impl FileExplorer {
 
             if let Some(node) = self.root_node.clone() {
                 let flags = TableFlags::ROW_BG | TableFlags::SCROLL_X | TableFlags::SCROLL_Y;
-                let column_width = ui.content_region_avail()[0].max(self.content_width);
+                let style = ui.clone_style();
+                let cell_padding_x = style.cell_padding()[0];
+                let scrollbar = if self.vertical_scrollbar {
+                    style.scrollbar_size()
+                } else {
+                    0.0
+                };
+                let column_width = (ui.content_region_avail()[0] - scrollbar).max(self.content_width + cell_padding_x);
                 // Cell padding would leave gaps above and below the row highlight, which only covers the item height.
-                let cell_padding_x = ui.clone_style().cell_padding()[0];
                 let _cell_padding = ui.push_style_var(dear_imgui_rs::StyleVar::CellPadding([cell_padding_x, 0.0]));
                 if let Some(_table) = ui.begin_table_with_sizing("##tree", 1, flags, [0.0, 0.0], 0.0) {
                     ui.table_setup_column(
@@ -478,6 +487,7 @@ impl FileExplorer {
                     let row_left = ui.cursor_screen_pos()[0];
                     Self::draw_node(ui, &node, &mut draw, 0);
                     self.content_width = draw.content_right - row_left;
+                    self.vertical_scrollbar = ui.scroll_max_y() > 0.0;
                 }
             } else if scanning {
                 ui.text_disabled(if is_remote {
