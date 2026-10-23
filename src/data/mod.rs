@@ -1,4 +1,5 @@
 pub mod geometry;
+pub mod grasp_events;
 pub mod hand_export;
 pub mod mano_model;
 pub mod mesh_sequence;
@@ -9,6 +10,9 @@ pub use geometry::{
     PreparedMesh, RIGHT_HAND_COLOR, Transform, bounding_diagonal, build_angle_weighted_surface, build_indexed_surface,
     build_joint_mesh, compute_transform, finger_of, grasp_aperture, hand_length, mano_faces, prepare_hand,
     ray_mesh_intersect, ray_triangle_intersect, track_color,
+};
+pub use grasp_events::{
+    Certainty, GraspEvent, GraspEventKind, GraspEventSet, GraspEventsError, GraspFile, GraspMark, GraspRow, HandGrip,
 };
 pub use hand_export::{
     HandExportError, HandExportRow, HandVariant, HexportMetadata, MEASURE_COLUMNS, MEASURE_COUNT, ManoParams,

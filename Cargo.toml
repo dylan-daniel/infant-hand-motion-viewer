@@ -7,6 +7,7 @@ edition = "2024"
 bytemuck = { version = "1.25.2", features = ["derive"] }
 byteorder = "1.5.0"
 crossbeam-channel = "0.5.17"
+csv = "1.4.0"
 dear-imgui-rs = { version = "0.18.0", features = ["glam", "freetype"] }
 dear-imgui-sys = { version = "0.18.0", features = ["vcpkg"] }
 dear-imgui-wgpu = "0.18.0"
