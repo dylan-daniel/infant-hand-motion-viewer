@@ -35,7 +35,7 @@ jobs:
       - name: Windows deps
         if: runner.os == 'Windows'
         run: cargo install cargo-vcpkg && cargo vcpkg build
-      - run: cargo test
+      - run: cargo test --release
       - run: cargo build --release
       - name: Package
         shell: bash
