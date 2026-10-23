@@ -17,6 +17,10 @@ file in this format. The converted batches 1 and 2 are at
 - Event times are **seconds from the start of the trial video**, three decimals. The viewer converts them to frames
   with the video's frame rate. Times are not guaranteed to be in order (E2 <= E3 <= E4); do not assume it.
 
+- The viewer rejects a file whose `e2`/`e3`/`e4` cell is not a non-negative number, or whose row has a blank
+  `subject` or `trial`. An unrecognised boolean cell reads as blank; an unrecognised certainty is shown as written.
+- An event whose time falls past the last frame of the video is not drawn.
+
 ## Columns
 
 | column | values | notes |
