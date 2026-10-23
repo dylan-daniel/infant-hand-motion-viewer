@@ -1,5 +1,6 @@
 use dear_imgui_rs::{Condition, Key, StyleColor, TabItemFlags, Ui, WindowFlags, sys};
 
+use crate::grasp_sources::{GraspSource, LoadedSource};
 use crate::remote::{ConnectionState, RemoteClient, RemoteConfig};
 
 const REMOTE_MODAL_WIDTH: f32 = 720.0;
@@ -167,14 +168,13 @@ pub struct VideoRootsResult {
     pub browse_local_requested: bool,
 }
 
-/// One list of roots with Move up / Move down / Remove per row; returns true when it was edited.
-fn draw_root_list(ui: &Ui, roots: &mut Vec<String>) -> bool {
-    let mut changed = false;
-    if roots.is_empty() {
-        ui.text_disabled("No folders yet.");
+/// A list with Up / Down / Remove per row, `row` drawing each entry; returns true when the list was edited.
+fn draw_ordered_list<T>(ui: &Ui, items: &mut Vec<T>, empty: &str, row: impl Fn(&T)) -> bool {
+    if items.is_empty() {
+        ui.text_disabled(empty);
     }
     let mut action: Option<(usize, i32)> = None;
-    for (i, root) in roots.iter().enumerate() {
+    for (i, item) in items.iter().enumerate() {
         let _id = ui.push_id(i as i32);
         if ui.small_button("Up") {
             action = Some((i, -1));
@@ -188,20 +188,23 @@ fn draw_root_list(ui: &Ui, roots: &mut Vec<String>) -> bool {
             action = Some((i, 0));
         }
         ui.same_line();
-        ui.text(root);
+        row(item);
     }
-    if let Some((i, step)) = action {
-        match step {
-            0 => {
-                roots.remove(i);
-            }
-            -1 if i > 0 => roots.swap(i, i - 1),
-            1 if i + 1 < roots.len() => roots.swap(i, i + 1),
-            _ => return false,
+    let Some((i, step)) = action else { return false };
+    match step {
+        0 => {
+            items.remove(i);
         }
-        changed = true;
+        -1 if i > 0 => items.swap(i, i - 1),
+        1 if i + 1 < items.len() => items.swap(i, i + 1),
+        _ => return false,
     }
-    changed
+    true
+}
+
+/// One list of roots; returns true when it was edited.
+fn draw_root_list(ui: &Ui, roots: &mut Vec<String>) -> bool {
+    draw_ordered_list(ui, roots, "No folders yet.", |root| ui.text(root))
 }
 
 /// Draw the Video Roots dialog: the folders searched, on this machine and on the server, for the video whose
@@ -260,6 +263,79 @@ pub fn draw_video_roots_modal(
             }
         }
         *select_tab = None;
+        ui.separator();
+        ui.button_with_size("Close", [ui.content_region_avail()[0], 0.0])
+    });
+    dialog.open = is_open;
+    result
+}
+
+/// State of the Grasp Events CSVs dialog.
+#[derive(Debug, Default)]
+pub struct GraspEventsDialog {
+    pub open: bool,
+    remote_input: String,
+}
+
+/// What the Grasp Events CSVs dialog asked for this frame.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct GraspEventsResult {
+    /// The list was edited, so the files should be loaded again.
+    pub changed: bool,
+    pub browse_local_requested: bool,
+}
+
+/// Draw the Grasp Events CSVs dialog: the files, local or on the server, highest priority first. A trial found in
+/// several files takes its whole row from the one highest in the list.
+pub fn draw_grasp_events_modal(
+    ui: &Ui,
+    dialog: &mut GraspEventsDialog,
+    sources: &mut Vec<GraspSource>,
+    loaded: &[LoadedSource],
+    remote_connected: bool,
+) -> GraspEventsResult {
+    let mut result = GraspEventsResult::default();
+    let mut is_open = dialog.open;
+    let remote_input = &mut dialog.remote_input;
+    draw_modal(ui, "Grasp Events CSVs", REMOTE_MODAL_WIDTH, &mut is_open, || {
+        ui.text_wrapped(
+            "Files with grasp annotations, one row per trial. The file at the top has the highest priority: \
+             for a trial in several files its whole row replaces the lower ones.",
+        );
+        result.changed |= draw_ordered_list(ui, sources, "No files yet.", |source| {
+            ui.text(if source.remote { "[remote]" } else { "[local]" });
+            ui.same_line();
+            ui.text(&source.path);
+            ui.same_line();
+            match loaded.iter().find(|entry| entry.source == *source) {
+                Some(entry) => match &entry.result {
+                    Ok(file) => ui.text_disabled(format!("{} trials", file.len())),
+                    Err(err) => ui.text_colored([1.0, 0.4, 0.4, 1.0], err),
+                },
+                None => ui.text_disabled("loading..."),
+            }
+        });
+        ui.separator();
+        if ui.button("Add Local File...") {
+            result.browse_local_requested = true;
+        }
+        if !remote_connected {
+            ui.text_disabled("Remote files load once you are connected to the server.");
+        }
+        ui.input_text("##remote_csv", remote_input)
+            .hint("/path/on/the/server/events.csv")
+            .build();
+        ui.same_line();
+        let path = remote_input.trim().to_string();
+        let source = GraspSource {
+            path: path.clone(),
+            remote: true,
+        };
+        if ui.with_disabled_if(path.is_empty() || sources.contains(&source), || ui.button("Add Remote")) {
+            sources.push(source);
+            remote_input.clear();
+            result.changed = true;
+        }
         ui.separator();
         ui.button_with_size("Close", [ui.content_region_avail()[0], 0.0])
     });

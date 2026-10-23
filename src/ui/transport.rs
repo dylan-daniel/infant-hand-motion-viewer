@@ -1,7 +1,9 @@
 use dear_imgui_rs::{StyleColor, Ui};
 
+use crate::data::GraspMark;
 use crate::data::mesh_sequence::{FLAG_LAYER_COUNT, MeshSequence};
 use crate::ui::PLAYBACK_BAR_HEIGHT;
+use crate::ui::grasp::{draw_arrows, event_tooltip_lines, has_event_at};
 use crate::ui::icons::UiIcons;
 
 /// Playback speeds the speed button cycles through.
@@ -138,6 +140,8 @@ pub struct Transport<'a> {
     pub sequence: Option<&'a MeshSequence>,
     pub per_track_coloring: bool,
     pub flag_layers_enabled: [bool; FLAG_LAYER_COUNT],
+    /// Grasp events of the open trial, placed on the scrubber.
+    pub grasp_marks: &'a [GraspMark],
 }
 
 impl Default for Transport<'_> {
@@ -152,6 +156,7 @@ impl Default for Transport<'_> {
             sequence: None,
             per_track_coloring: false,
             flag_layers_enabled: [true; FLAG_LAYER_COUNT],
+            grasp_marks: &[],
         }
     }
 }
@@ -350,6 +355,16 @@ fn draw_frame_slider(
         );
     }
 
+    for mark in transport.grasp_marks {
+        draw_arrows(
+            draw_list,
+            geometry.center_x(mark.frame),
+            slider_min[1],
+            slider_max[1],
+            mark,
+        );
+    }
+
     let grab_center_x = geometry.center_x(*current_frame);
     let grab_min = [grab_center_x - grab_sz * 0.5, slider_min[1] + grab_padding];
     let grab_max = [grab_center_x + grab_sz * 0.5, slider_max[1] - grab_padding];
@@ -381,9 +396,12 @@ fn draw_frame_slider(
                     active_layers.push(idx);
                 }
             }
-            if !active_layers.is_empty() {
+            let has_events = has_event_at(transport.grasp_marks, hover_frame);
+            if !active_layers.is_empty() || has_events {
                 crate::ui::padded_tooltip(ui, || {
-                    ui.text(format!("Frame {} Flags:", hover_frame + 1));
+                    if !active_layers.is_empty() {
+                        ui.text(format!("Frame {} Flags:", hover_frame + 1));
+                    }
                     for idx in active_layers {
                         let c = FLAG_LAYERS[idx].color;
                         ui.color_button(
@@ -393,6 +411,7 @@ fn draw_frame_slider(
                         ui.same_line();
                         ui.text(FLAG_LAYERS[idx].display_name);
                     }
+                    event_tooltip_lines(ui, transport.grasp_marks, hover_frame);
                 });
             }
         }

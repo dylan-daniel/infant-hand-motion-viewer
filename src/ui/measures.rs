@@ -1,6 +1,9 @@
 use dear_imgui_rs::{Condition, Id, Ui, WindowFlags};
 
-use crate::data::{LEFT_HAND_COLOR, MEASURE_COUNT, MeasureSeries, MeshSequence, RIGHT_HAND_COLOR, track_color};
+use crate::data::{
+    GraspMark, LEFT_HAND_COLOR, MEASURE_COUNT, MeasureSeries, MeshSequence, RIGHT_HAND_COLOR, track_color,
+};
+use crate::ui::grasp::{draw_vline, event_tooltip_lines, has_event_at};
 
 /// Plot titles, in [`crate::data::MEASURE_COLUMNS`] order.
 pub const MEASURE_TITLES: [&str; MEASURE_COUNT] = [
@@ -114,6 +117,7 @@ pub fn draw_measures_window(
     sequence: Option<&MeshSequence>,
     per_track: bool,
     current_frame: usize,
+    grasp_marks: &[GraspMark],
     dock_id: Option<Id>,
 ) -> Option<usize> {
     if !open {
@@ -140,7 +144,7 @@ pub fn draw_measures_window(
                 draw_legend(ui, &view.series[0]);
                 for (m, series) in view.series.iter().enumerate() {
                     let height = if m == 0 { APERTURE_PLOT_HEIGHT } else { PLOT_HEIGHT };
-                    if let Some(frame) = draw_plot(ui, m, series, frame_count, current_frame, height) {
+                    if let Some(frame) = draw_plot(ui, m, series, frame_count, current_frame, grasp_marks, height) {
                         scrubbed = Some(frame);
                     }
                 }
@@ -184,6 +188,7 @@ fn draw_plot(
     series: &[MeasureSeries],
     frame_count: usize,
     current_frame: usize,
+    grasp_marks: &[GraspMark],
     height: f32,
 ) -> Option<usize> {
     let _id = ui.push_id(measure as i32);
@@ -246,6 +251,11 @@ fn draw_plot(
         ),
     }
 
+    for mark in grasp_marks {
+        let x = frame_to_x(mark.frame, frame_count, min[0], max[0]);
+        draw_vline(&draw_list, x, min[1], max[1], mark);
+    }
+
     let cursor_x = frame_to_x(current_frame, frame_count, min[0], max[0]);
     draw_list
         .add_line([cursor_x, min[1]], [cursor_x, max[1]], super::rgba(255, 220, 80, 255))
@@ -261,6 +271,9 @@ fn draw_plot(
             .build();
         super::padded_tooltip(ui, || {
             ui.text(format!("Frame index {frame}"));
+            if has_event_at(grasp_marks, frame) {
+                event_tooltip_lines(ui, grasp_marks, frame);
+            }
             for s in series {
                 match s.values.get(frame).filter(|v| v.is_finite()) {
                     Some(v) => ui.text_colored(series_color(s), format!("{}: {v:.3}", s.label)),
