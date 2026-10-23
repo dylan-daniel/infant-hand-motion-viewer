@@ -26,7 +26,11 @@ jobs:
         run: brew install freetype pkg-config
       - name: Windows deps
         if: runner.os == 'Windows'
-        run: cargo install cargo-vcpkg && cargo vcpkg build
+        # The restored target/ cache can hold an earlier vcpkg checkout, which cargo-vcpkg will not clone over
+        run: |
+          Remove-Item -Recurse -Force target/vcpkg -ErrorAction SilentlyContinue
+          cargo install cargo-vcpkg
+          cargo vcpkg build
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test
