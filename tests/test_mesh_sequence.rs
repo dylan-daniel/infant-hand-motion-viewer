@@ -131,3 +131,17 @@ fn test_raw_smoothed_toggle_switches_measures() {
     assert_eq!(seq.frame_count(), 1);
     assert!(seq.load_frame(0).is_some());
 }
+
+#[test]
+fn test_hands_keep_their_row_order_when_the_forward_pass_runs_in_parallel() {
+    let rows: Vec<_> = (0..64)
+        .map(|i| measure_row(i / 4, i % 2 == 0, i, "infant", i as f32))
+        .collect();
+    let seq = MeshSequence::from_bytes("t", &common::generate_measure_hexport(&rows, true)).unwrap();
+    assert_eq!(seq.frame_count(), 16);
+    for frame in 0..16 {
+        let tracks: Vec<_> = seq.load_frame(frame).unwrap().iter().map(|h| h.hand_track_id).collect();
+        let expected: Vec<_> = (0..4).map(|k| frame as i32 * 4 + k).collect();
+        assert_eq!(tracks, expected);
+    }
+}
