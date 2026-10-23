@@ -3,7 +3,7 @@ use dear_imgui_rs::{Condition, DrawListMut, Id, TreeNodeFlags, Ui, WindowFlags};
 use crate::data::{Certainty, GraspEventKind, GraspMark, GraspRow, HandGrip};
 
 /// Side of the equilateral arrow triangles.
-const ARROW_SIDE: f32 = 8.0;
+const ARROW_SIDE: f32 = 6.0;
 const DASH: f32 = 4.0;
 
 /// Okabe-Ito orange, sky blue and reddish purple: distinct under the common color blindnesses and readable on
