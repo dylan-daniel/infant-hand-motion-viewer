@@ -487,6 +487,7 @@ impl ApplicationHandler for AppRunner {
         explorer.set_remote_client(remote_client.clone());
         explorer.set_remote_root(&self.settings.remote_data_folder);
         explorer.set_saved_open(self.settings.expanded_folders.clone());
+        explorer.set_filter_text(&self.settings.explorer_filter);
         explorer.set_saved_collapsed(self.settings.collapsed_folders.clone());
 
         if self.settings.remote_mode && !self.settings.remote_host.is_empty() {
@@ -772,6 +773,7 @@ fn persist_settings(state: &mut AppState) {
     }
     state.settings.active_pane = state.active_pane;
     state.settings.playback_speed = state.playback_speed;
+    state.settings.explorer_filter = state.explorer.filter_text().to_string();
     state.settings.expanded_folders = state.explorer.expanded_paths();
     state.settings.collapsed_folders = state.explorer.collapsed_paths();
     if state.camera_is_free {

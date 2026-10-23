@@ -378,3 +378,60 @@ fn test_scan_root_attaches_quality_score_to_trial_files_only() {
     assert_eq!(subject.quality_score, None);
     assert_eq!(scores, vec![("T1_30fps", Some(0.8)), ("T2_30fps", None)]);
 }
+
+mod trial_filter {
+    use infant_hand_motion_viewer::ui::{FileExplorer, TrialFilter};
+
+    fn shown(query: &str, subject: &str, trial: &str) -> bool {
+        TrialFilter::parse(query).matches(subject, trial)
+    }
+
+    #[test]
+    fn an_empty_query_filters_nothing() {
+        for query in ["", "   ", ",", " , ,", "!", "! , !"] {
+            let filter = TrialFilter::parse(query);
+            assert!(!filter.is_active(), "{query:?}");
+            assert!(filter.matches("BF65", "T1"));
+        }
+    }
+
+    #[test]
+    fn terms_are_case_insensitive_substrings_of_the_subject_or_the_trial() {
+        assert!(shown("b", "BF65", "T11_BabyView"));
+        assert!(shown("lk26", "LK26", "T1"));
+        assert!(shown("babyview", "XX", "T11_BabyView"));
+        assert!(shown("f6", "BF65", "T1"));
+        assert!(!shown("zz", "BF65", "T11_BabyView"));
+    }
+
+    #[test]
+    fn commas_are_or_and_spaces_are_and() {
+        assert!(shown("LK26, BF65", "BF65", "T1"));
+        assert!(shown("LK26, BF65", "LK26", "T1"));
+        assert!(!shown("LK26, BF65", "AE45", "T1"));
+        assert!(shown("LK26 t1", "LK26", "T1_native"));
+        assert!(!shown("LK26 t2", "LK26", "T1_native"));
+        assert!(shown("LK26 t2, BF65", "BF65", "T9"));
+    }
+
+    #[test]
+    fn exclusions_remove_matches_wherever_they_appear() {
+        assert!(!shown("B, LK26, !BF65", "BF65", "T1"));
+        assert!(shown("B, LK26, !BF65", "BB10", "T1"));
+        assert!(shown("B, LK26, !BF65", "LK26", "T1"));
+        assert!(!shown("B, LK26, !BF65", "AE45", "T1"));
+        assert!(shown("!BF65", "LK26", "T1"));
+        assert!(!shown("!BF65", "BF65", "T1"));
+        assert!(!shown("LK26 !t2", "LK26", "T2"));
+        assert!(shown("LK26 !t2", "LK26", "T1"));
+        assert!(!shown("LK26, !t2", "LK26", "T2"));
+    }
+
+    #[test]
+    fn the_explorer_remembers_its_filter_text() {
+        let mut explorer = FileExplorer::new();
+        assert_eq!(explorer.filter_text(), "");
+        explorer.set_filter_text("LK26, !BF65");
+        assert_eq!(explorer.filter_text(), "LK26, !BF65");
+    }
+}

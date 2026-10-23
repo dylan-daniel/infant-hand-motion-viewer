@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{
@@ -8,12 +8,14 @@ use std::sync::{
 };
 
 use dear_imgui_rs::{
-    Condition, Id, StyleColor, TableColumnFlags, TableColumnWidth, TableFlags, TextureId, Ui, WindowFlags,
+    Condition, Id, InputTextFlags, Key, StyleColor, TableColumnFlags, TableColumnWidth, TableFlags, TextureId, Ui,
+    WindowFlags,
 };
 
 use crate::data::hand_export::{HexportMetadata, read_hexport_metadata};
 use crate::remote::{ExplorerNode, RemoteClient};
 use crate::ui::icons::UiIcons;
+use crate::ui::trial_filter::TrialFilter;
 use crate::util::WorkerQueue;
 
 /// Compare two strings naturally (e.g. "trial_1" before "trial_10").
@@ -103,6 +105,10 @@ pub struct FileExplorer {
     content_width: f32,
     /// Whether the tree showed a vertical scroll bar last frame, which narrows the room the column has.
     vertical_scrollbar: bool,
+    filter_text: String,
+    /// Whether the filter was active last frame, so clearing it can put the user's own open folders back.
+    filter_was_active: bool,
+    focus_filter: bool,
 
     in_flight: Arc<AtomicUsize>,
     latest_scan: Arc<AtomicU64>,
@@ -124,6 +130,9 @@ impl FileExplorer {
             selected_path: String::new(),
             content_width: 0.0,
             vertical_scrollbar: false,
+            filter_text: String::new(),
+            filter_was_active: false,
+            focus_filter: false,
 
             in_flight: Arc::new(AtomicUsize::new(0)),
             latest_scan: Arc::new(AtomicU64::new(0)),
@@ -184,6 +193,14 @@ impl FileExplorer {
     }
 
     /// Restore folders the user left expanded last session.
+    pub fn filter_text(&self) -> &str {
+        &self.filter_text
+    }
+
+    pub fn set_filter_text(&mut self, text: &str) {
+        self.filter_text = text.to_string();
+    }
+
     pub fn set_saved_open(&mut self, paths: Vec<String>) {
         for path in paths {
             self.open_state.insert(path, true);
@@ -456,9 +473,32 @@ impl FileExplorer {
             }
             let scanning = self.scanning();
             self.draw_toolbar(ui, icons, &mut result, is_remote, scanning);
+            if (result.hovered || result.focused) && ui.io().key_ctrl() && ui.is_key_pressed(Key::F) {
+                self.focus_filter = true;
+            }
+            if std::mem::take(&mut self.focus_filter) {
+                ui.set_keyboard_focus_here();
+            }
+            ui.set_next_item_width(-1.0);
+            ui.input_text("##trial_filter", &mut self.filter_text)
+                .hint("Filter trials (e.g. B, LK26, !BF65)")
+                .flags(InputTextFlags::ESCAPE_CLEARS_ALL)
+                .build();
             ui.separator();
+            let filter = TrialFilter::parse(&self.filter_text);
+            let filter_active = filter.is_active();
 
-            if let Some(node) = self.root_node.clone() {
+            let mut visible = HashSet::new();
+            if filter_active && let Some(root) = &self.root_node {
+                Self::collect_visible(root, "", &filter, &mut visible);
+            }
+            let nothing_matches = filter_active && self.root_node.is_some() && visible.is_empty();
+            if nothing_matches {
+                ui.text_disabled("No trials match the filter.");
+            }
+            let visible = filter_active.then_some(&visible);
+
+            if let Some(node) = self.root_node.clone().filter(|_| !nothing_matches) {
                 let flags = TableFlags::ROW_BG | TableFlags::SCROLL_X | TableFlags::SCROLL_Y;
                 let style = ui.clone_style();
                 let cell_padding_x = style.cell_padding()[0];
@@ -483,6 +523,8 @@ impl FileExplorer {
                         open_state: &mut self.open_state,
                         selected_path: &self.selected_path,
                         content_right: 0.0,
+                        visible,
+                        restoring_open: self.filter_was_active && !filter_active,
                     };
                     let row_left = ui.cursor_screen_pos()[0];
                     Self::draw_node(ui, &node, &mut draw, 0);
@@ -504,7 +546,28 @@ impl FileExplorer {
             }
         });
 
+        self.filter_was_active = TrialFilter::parse(&self.filter_text).is_active();
         result
+    }
+
+    /// Records the paths of trials matching `filter` and of the folders above them; true if `node` is one of them.
+    fn collect_visible(
+        node: &ExplorerNode,
+        parent_name: &str,
+        filter: &TrialFilter,
+        out: &mut HashSet<String>,
+    ) -> bool {
+        let shown = if node.is_file {
+            filter.matches(parent_name, &node.name)
+        } else {
+            node.children.iter().fold(false, |any, child| {
+                Self::collect_visible(child, &node.name, filter, out) | any
+            })
+        };
+        if shown {
+            out.insert(node.path.clone());
+        }
+        shown
     }
 
     /// Centered prompt shown while no local data folder has been chosen.
@@ -639,6 +702,9 @@ impl FileExplorer {
     }
 
     fn draw_node(ui: &Ui, node: &ExplorerNode, draw: &mut TreeDraw, depth: usize) {
+        if draw.visible.is_some_and(|visible| !visible.contains(&node.path)) {
+            return;
+        }
         ui.table_next_row();
         ui.table_next_column();
         let node_left = ui.cursor_screen_pos()[0];
@@ -666,16 +732,28 @@ impl FileExplorer {
                 draw.result.is_remote = draw.is_remote;
             }
         } else {
-            let should_open = draw.open_state.get(&node.path).copied().unwrap_or(depth == 0);
+            let filtering = draw.visible.is_some();
+            let saved_open = draw.open_state.get(&node.path).copied().unwrap_or(depth == 0);
+            // A filter opens every folder with a match without touching the user's own state, which comes back
+            // (forced once) when the filter is cleared.
+            let (should_open, condition) = if filtering {
+                (true, Condition::Always)
+            } else if draw.restoring_open {
+                (saved_open, Condition::Always)
+            } else {
+                (saved_open, Condition::FirstUseEver)
+            };
 
             let node_token = ui
                 .tree_node_config(&node.path)
                 .label("")
-                .opened(should_open, Condition::FirstUseEver)
+                .opened(should_open, condition)
                 .span_full_width(true)
                 .push();
             let open = node_token.is_some();
-            draw.open_state.insert(node.path.clone(), open);
+            if !filtering {
+                draw.open_state.insert(node.path.clone(), open);
+            }
             let icon = if open {
                 draw.icons.folder_open
             } else {
@@ -752,6 +830,10 @@ struct TreeDraw<'a> {
     open_state: &'a mut HashMap<String, bool>,
     selected_path: &'a str,
     content_right: f32,
+    /// Paths to show while a filter is active; `None` shows everything.
+    visible: Option<&'a HashSet<String>>,
+    /// The frame after a filter was cleared, when folders go back to the state the user had.
+    restoring_open: bool,
 }
 
 impl Default for FileExplorer {

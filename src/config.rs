@@ -88,6 +88,9 @@ pub struct Config {
     #[serde(default = "default_true")]
     pub use_smoothed: bool,
     /// Folders on this machine searched for the video an export names.
+    /// The explorer's trial filter text.
+    #[serde(default)]
+    pub explorer_filter: String,
     #[serde(default)]
     pub local_video_roots: Vec<String>,
     /// Folders on the remote server searched for it, sent with each video request.
@@ -164,6 +167,7 @@ impl Default for Config {
             show_hand_overlay: false,
             show_measures: false,
             use_smoothed: default_true(),
+            explorer_filter: String::new(),
             local_video_roots: Vec::new(),
             remote_video_roots: Vec::new(),
             free_camera: default_true(),

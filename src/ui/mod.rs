@@ -6,6 +6,7 @@ pub mod measures;
 pub mod menu_bar;
 pub mod modals;
 pub mod transport;
+pub mod trial_filter;
 pub mod viewport;
 
 // Pixel sizes the bundled font is baked at (baking each size keeps text crisp).
@@ -26,6 +27,7 @@ pub use transport::{
     FLAG_COLORS, FLAG_LAYERS, FLAG_NAMES, FlagLayer, PLAYBACK_SPEEDS, SliderGeometry, Transport, TransportState,
     draw_transport_bar, format_speed, next_playback_speed,
 };
+pub use trial_filter::TrialFilter;
 pub use viewport::{ViewportResult, draw_viewport_window};
 
 pub(crate) fn rgba(r: u8, g: u8, b: u8, a: u8) -> [f32; 4] {
