@@ -682,6 +682,7 @@ impl FileExplorer {
     }
 
     /// Paint the score in yellow against the row's right edge, never over the name that ends at `name_right`.
+    /// Returns the narrowest row width that fits both, not the painted edge, so the column can shrink again.
     fn draw_quality_score(ui: &Ui, score: f32, name_right: f32) -> f32 {
         let text = format_quality_score(score);
         let width = ui.calc_text_size(&text)[0];
@@ -691,7 +692,7 @@ impl FileExplorer {
         let y = (item_min[1] + item_max[1]) * 0.5 - ui.current_font_size() * 0.5;
         ui.get_window_draw_list()
             .add_text([x, y], crate::ui::rgba(255, 220, 80, 255), &text);
-        x + width + ui.clone_style().item_spacing()[0]
+        name_right + width + ui.clone_style().item_spacing()[0]
     }
 
     /// Paint the icon and name over the row just submitted with an empty label, so the icon sits between the arrow and the text.
