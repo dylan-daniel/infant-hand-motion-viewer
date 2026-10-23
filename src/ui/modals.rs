@@ -223,11 +223,8 @@ pub fn draw_video_roots_modal(
         remote_input,
         ..
     } = dialog;
-    draw_modal(ui, "Video Roots", REMOTE_MODAL_WIDTH, &mut is_open, || {
-        ui.text_wrapped(
-            "Folders searched for the source video of an open trial. The video is matched by its SHA-256, \
-             so it can live anywhere under a root.",
-        );
+    draw_modal(ui, "Video Folders", REMOTE_MODAL_WIDTH, &mut is_open, || {
+        ui.text_wrapped("Folders searched for the trial's video.");
         let want = *select_tab;
         let selected = |tab: RootsTab| {
             if want == Some(tab) {
@@ -246,7 +243,7 @@ pub fn draw_video_roots_modal(
             }
             if let Some(_tab) = ui.tab_item_with_flags("Remote", None, selected(RootsTab::Remote)) {
                 if !remote_connected {
-                    ui.text_disabled("Not connected: folders are searched on the server when you connect.");
+                    ui.text_disabled("Not connected to the server.");
                 }
                 result.changed |= draw_root_list(ui, remote);
                 ui.separator();

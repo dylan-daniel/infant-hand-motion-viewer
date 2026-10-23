@@ -94,44 +94,29 @@ pub fn draw_menu_bar(ui: &Ui, mut state: MenuState) -> MenuResult {
             ui.checkbox("Per-Track Coloring", &mut state.per_track_coloring);
             if ui.is_item_hovered() {
                 ui.tooltip(|| {
-                    ui.text(
-                        "Off: only infant-labeled hands are shown, tinted red (left) / blue (right).\n\
-                         On: every hand is shown, colored uniquely by its tracking ID.\n\
-                         Only applies to hands opened from a pipeline export file; a raw mesh\n\
-                         sequence with no tracking/classification data is never filtered.",
-                    );
+                    ui.text("Off: infant hands only (red left, blue right).\nOn: every hand, colored by track.");
                 });
             }
             ui.checkbox("Smoothed Hands", &mut state.use_smoothed);
             if ui.is_item_hovered() {
                 crate::ui::padded_tooltip(ui, || {
-                    ui.text(
-                        "On: the smoothed fit. Off: WiLoR's raw per-frame fit.\n\
-                         Applies to the 3D hands, the Frame View overlay and the Hand Measures plots.",
-                    );
+                    ui.text("On: smoothed fit. Off: raw fit.");
                 });
             }
             ui.checkbox("Hand Overlay", &mut state.hand_overlay);
             if ui.is_item_hovered() {
                 crate::ui::padded_tooltip(ui, || {
-                    ui.text(
-                        "Draws the hands over the Frame View image, projected with WiLoR's demo camera\n\
-                         and shaded like its demo renders. Follows Per-Track Coloring for which hands show.",
-                    );
+                    ui.text("Draw the hands on top of the video frame.");
                 });
             }
-            if ui.menu_item("Video Roots...") {
+            if ui.menu_item("Video Folders...") {
                 result.open_video_roots_requested = true;
             }
             ui.menu("Cache", || {
-                ui.checkbox("Cache Remote Files on Disk", &mut state.cache_enabled);
+                ui.checkbox("Cache Remote Files", &mut state.cache_enabled);
                 if ui.is_item_hovered() {
                     crate::ui::padded_tooltip(ui, || {
-                        ui.text(
-                            "Keeps downloaded trial videos and hand exports so reopening a trial skips the download.\n\
-                             A cached export is re-checked against the server by its hash and only\n\
-                             downloaded again if it changed. Videos are identified by their hash. Off by default.",
-                        );
+                        ui.text("Keep downloaded videos and exports on disk so trials reopen faster.");
                     });
                 }
                 ui.input_text("Location", &mut state.cache_location)
