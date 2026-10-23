@@ -16,17 +16,17 @@ pub const MEASURE_TITLES: [&str; MEASURE_COUNT] = [
 const APERTURE_PLOT_HEIGHT: f32 = 170.0;
 const PLOT_HEIGHT: f32 = 100.0;
 
-/// The measure series for the open sequence, rebuilt only when the sequence or the track mode changes.
+/// The measure series for the open sequence, rebuilt only when the sequence, the track mode or the raw/smoothed choice changes.
 #[derive(Default)]
 pub struct MeasuresView {
-    key: Option<(String, bool)>,
+    key: Option<(String, bool, bool)>,
     series: Vec<Vec<MeasureSeries>>,
     has_data: bool,
 }
 
 impl MeasuresView {
     fn sync(&mut self, sequence: &MeshSequence, per_track: bool) {
-        let key = (sequence.path().to_string(), per_track);
+        let key = (sequence.path().to_string(), per_track, sequence.is_smoothed());
         if self.key.as_ref() == Some(&key) {
             return;
         }

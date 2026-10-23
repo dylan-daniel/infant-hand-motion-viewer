@@ -86,6 +86,8 @@ pub struct Config {
     #[serde(default)]
     pub show_measures: bool,
     #[serde(default = "default_true")]
+    pub use_smoothed: bool,
+    #[serde(default = "default_true")]
     pub free_camera: bool,
     #[serde(default)]
     pub active_pane: i32,
@@ -155,6 +157,7 @@ impl Default for Config {
             per_track_coloring: false,
             show_hand_overlay: false,
             show_measures: false,
+            use_smoothed: default_true(),
             free_camera: default_true(),
             active_pane: 0,
             flag_layers_enabled: default_flag_layers(),

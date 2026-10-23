@@ -944,6 +944,14 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         }
     }
 
+    if let Some(seq) = state.sequence.as_mut()
+        && seq.is_smoothed() != state.settings.use_smoothed
+    {
+        seq.set_smoothed(state.settings.use_smoothed);
+        state.loaded_frame = None;
+        state.overlay_key = None;
+    }
+
     // Prepare GPU mesh if frame changed
     let has_sequence = state.sequence.is_some();
     let frame_count = state.sequence.as_ref().map(|s| s.frame_count()).unwrap_or(0);
@@ -1043,6 +1051,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         per_track_coloring: state.settings.per_track_coloring,
         hand_overlay: state.settings.show_hand_overlay,
         show_measures: state.settings.show_measures,
+        use_smoothed: state.settings.use_smoothed,
         msaa_samples: state.renderer.sample_count(),
         msaa_options: state.gpu.msaa_counts.clone(),
         open_file: open_file_label,
@@ -1211,6 +1220,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
     state.settings.hand_translucent = menu_result.state.hand_translucent;
     state.settings.show_camera_marker = menu_result.state.show_camera_marker;
     state.settings.show_hand_overlay = menu_result.state.hand_overlay;
+    state.settings.use_smoothed = menu_result.state.use_smoothed;
     state.settings.video_cache_enabled = menu_result.state.video_cache_enabled;
     state.settings.video_cache_location =
         Some(menu_result.state.video_cache_location.clone()).filter(|location| !location.trim().is_empty());

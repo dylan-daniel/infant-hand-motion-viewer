@@ -11,6 +11,7 @@ pub struct MenuState {
     pub per_track_coloring: bool,
     pub hand_overlay: bool,
     pub show_measures: bool,
+    pub use_smoothed: bool,
     /// Multisample count in use (1 = off) and the counts the GPU offers, for the Anti-Aliasing submenu.
     pub msaa_samples: u32,
     pub msaa_options: Vec<u32>,
@@ -91,6 +92,15 @@ pub fn draw_menu_bar(ui: &Ui, mut state: MenuState) -> MenuResult {
                          On: every hand is shown, colored uniquely by its tracking ID.\n\
                          Only applies to hands opened from a pipeline export file; a raw mesh\n\
                          sequence with no tracking/classification data is never filtered.",
+                    );
+                });
+            }
+            ui.checkbox("Smoothed Hands", &mut state.use_smoothed);
+            if ui.is_item_hovered() {
+                crate::ui::padded_tooltip(ui, || {
+                    ui.text(
+                        "On: the smoothed fit. Off: WiLoR's raw per-frame fit.\n\
+                         Applies to the 3D hands, the Frame View overlay and the Hand Measures plots.",
                     );
                 });
             }
