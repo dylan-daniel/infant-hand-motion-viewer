@@ -5,6 +5,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::cache::{self, DiskCache};
 use crate::data::FLAG_LAYER_COUNT;
+use crate::grasp_sources::GraspSource;
 
 fn default_playback_speed() -> f32 {
     1.0
@@ -96,6 +97,9 @@ pub struct Config {
     /// Folders on the remote server searched for it, sent with each video request.
     #[serde(default)]
     pub remote_video_roots: Vec<String>,
+    /// Grasp-events CSVs, highest priority first.
+    #[serde(default)]
+    pub grasp_event_sources: Vec<GraspSource>,
     #[serde(default = "default_true")]
     pub free_camera: bool,
     #[serde(default)]
@@ -170,6 +174,7 @@ impl Default for Config {
             explorer_filter: String::new(),
             local_video_roots: Vec::new(),
             remote_video_roots: Vec::new(),
+            grasp_event_sources: Vec::new(),
             free_camera: default_true(),
             active_pane: 0,
             flag_layers_enabled: default_flag_layers(),

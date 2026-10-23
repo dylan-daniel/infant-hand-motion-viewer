@@ -3,6 +3,7 @@ pub mod cache;
 pub mod config;
 pub mod data;
 pub mod graphics;
+pub mod grasp_sources;
 pub mod remote;
 pub mod ui;
 pub mod util;
