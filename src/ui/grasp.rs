@@ -165,8 +165,12 @@ pub fn draw_grasp_window(
     state: GraspPaneState<'_>,
     hide_unused_hands: &mut bool,
     pause_at_events: &mut bool,
+    open: bool,
     dock_id: Option<Id>,
 ) {
+    if !open {
+        return;
+    }
     if let Some(did) = dock_id {
         ui.set_next_window_dock_id_with_cond(did, Condition::FirstUseEver);
     }

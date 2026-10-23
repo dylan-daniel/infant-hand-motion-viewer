@@ -29,6 +29,7 @@ pub fn draw_image_window(
     tex_h: u32,
     transport: &Transport,
     icons: &UiIcons,
+    open: bool,
     dock_id: Option<Id>,
     notice: Option<&VideoNotice>,
 ) -> ImageViewResult {
@@ -44,6 +45,9 @@ pub fn draw_image_window(
         },
         dock_id: Id::from(0),
     };
+    if !open {
+        return result;
+    }
 
     if let Some(did) = dock_id {
         ui.set_next_window_dock_id_with_cond(did, Condition::FirstUseEver);

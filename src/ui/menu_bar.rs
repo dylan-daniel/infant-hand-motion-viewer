@@ -11,6 +11,11 @@ pub struct MenuState {
     pub per_track_coloring: bool,
     pub hand_overlay: bool,
     pub show_measures: bool,
+    pub show_flags: bool,
+    pub show_grasp: bool,
+    pub show_frame_view: bool,
+    pub show_wilor_view: bool,
+    pub show_sam3_view: bool,
     pub use_smoothed: bool,
     /// Multisample count in use (1 = off) and the counts the GPU offers, for the Anti-Aliasing submenu.
     pub msaa_samples: u32,
@@ -85,6 +90,11 @@ pub fn draw_menu_bar(ui: &Ui, mut state: MenuState) -> MenuResult {
 
         ui.menu("View", || {
             ui.checkbox("Hand Measures", &mut state.show_measures);
+            ui.checkbox("Flags", &mut state.show_flags);
+            ui.checkbox("Grasp", &mut state.show_grasp);
+            ui.checkbox("Frame View", &mut state.show_frame_view);
+            ui.checkbox("WiLoR View", &mut state.show_wilor_view);
+            ui.checkbox("SAM3 View", &mut state.show_sam3_view);
         });
 
         ui.menu("Settings", || {

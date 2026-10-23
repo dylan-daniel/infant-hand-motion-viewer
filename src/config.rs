@@ -87,6 +87,16 @@ pub struct Config {
     #[serde(default)]
     pub show_measures: bool,
     #[serde(default = "default_true")]
+    pub show_flags: bool,
+    #[serde(default = "default_true")]
+    pub show_grasp: bool,
+    #[serde(default = "default_true")]
+    pub show_frame_view: bool,
+    #[serde(default = "default_true")]
+    pub show_wilor_view: bool,
+    #[serde(default = "default_true")]
+    pub show_sam3_view: bool,
+    #[serde(default = "default_true")]
     pub use_smoothed: bool,
     /// Folders on this machine searched for the video an export names.
     /// The explorer's trial filter text.
@@ -176,6 +186,11 @@ impl Default for Config {
             per_track_coloring: false,
             show_hand_overlay: false,
             show_measures: false,
+            show_flags: default_true(),
+            show_grasp: default_true(),
+            show_frame_view: default_true(),
+            show_wilor_view: default_true(),
+            show_sam3_view: default_true(),
             use_smoothed: default_true(),
             explorer_filter: String::new(),
             local_video_roots: Vec::new(),

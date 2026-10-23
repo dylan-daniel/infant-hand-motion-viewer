@@ -77,3 +77,9 @@ fn the_source_list_is_saved_in_the_config() {
     assert!(!Config::default().pause_at_events);
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn every_pane_is_shown_by_default() {
+    let cfg = Config::default();
+    assert!(cfg.show_flags && cfg.show_grasp && cfg.show_frame_view && cfg.show_wilor_view && cfg.show_sam3_view);
+}

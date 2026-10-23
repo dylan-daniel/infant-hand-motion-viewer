@@ -1189,6 +1189,11 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         per_track_coloring: state.settings.per_track_coloring,
         hand_overlay: state.settings.show_hand_overlay,
         show_measures: state.settings.show_measures,
+        show_flags: state.settings.show_flags,
+        show_grasp: state.settings.show_grasp,
+        show_frame_view: state.settings.show_frame_view,
+        show_wilor_view: state.settings.show_wilor_view,
+        show_sam3_view: state.settings.show_sam3_view,
         use_smoothed: state.settings.use_smoothed,
         msaa_samples: state.renderer.sample_count(),
         msaa_options: state.gpu.msaa_counts.clone(),
@@ -1255,7 +1260,9 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             .build();
 
         // Build transport props
-        let transport_pane = state.active_pane;
+        let image_windows_open =
+            state.settings.show_frame_view || state.settings.show_wilor_view || state.settings.show_sam3_view;
+        let transport_pane = if image_windows_open { state.active_pane } else { 0 };
         let transport_base = Transport {
             has_sequence,
             current_frame: state.current_frame,
@@ -1310,12 +1317,18 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             state.frame_image.height(),
             &image_transport,
             &state.icons,
+            state.settings.show_frame_view,
             None,
             notice.as_ref(),
         );
 
         let mut extra_results = Vec::new();
+        let extra_dock = state.settings.show_frame_view.then_some(i_res.dock_id);
         for view in &state.extra_views {
+            let open = match view.kind {
+                "wilor" => state.settings.show_wilor_view,
+                _ => state.settings.show_sam3_view,
+            };
             extra_results.push(draw_image_window(
                 ui,
                 &format!("{}###{}", view.title, view.title),
@@ -1324,12 +1337,19 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
                 view.image.height(),
                 &image_transport,
                 &state.icons,
-                Some(i_res.dock_id),
+                open,
+                extra_dock,
                 None,
             ));
         }
 
-        draw_flags_window(ui, "Flags###Flags", &mut state.settings.flag_layers_enabled, None);
+        draw_flags_window(
+            ui,
+            "Flags###Flags",
+            &mut state.settings.flag_layers_enabled,
+            state.settings.show_flags,
+            None,
+        );
 
         let measures_scrub = draw_measures_window(
             ui,
@@ -1359,6 +1379,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             grasp_state,
             &mut state.settings.hide_unused_hands,
             &mut state.settings.pause_at_events,
+            state.settings.show_grasp,
             None,
         );
 
@@ -1415,6 +1436,11 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
     if menu_result.state.show_measures != measures_menu_in {
         state.settings.show_measures = menu_result.state.show_measures;
     }
+    state.settings.show_flags = menu_result.state.show_flags;
+    state.settings.show_grasp = menu_result.state.show_grasp;
+    state.settings.show_frame_view = menu_result.state.show_frame_view;
+    state.settings.show_wilor_view = menu_result.state.show_wilor_view;
+    state.settings.show_sam3_view = menu_result.state.show_sam3_view;
 
     state.settings.show_controls = viewport_result.show_controls;
     state.viewport_hovered = viewport_result.hovered;

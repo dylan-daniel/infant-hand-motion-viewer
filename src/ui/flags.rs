@@ -8,8 +8,12 @@ pub fn draw_flags_window(
     ui: &Ui,
     title: &str,
     flag_layers_enabled: &mut [bool; FLAG_LAYER_COUNT],
+    open: bool,
     dock_id: Option<Id>,
 ) {
+    if !open {
+        return;
+    }
     if let Some(did) = dock_id {
         ui.set_next_window_dock_id_with_cond(did, Condition::FirstUseEver);
     }
