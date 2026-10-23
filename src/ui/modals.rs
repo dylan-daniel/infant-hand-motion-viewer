@@ -1,4 +1,4 @@
-use dear_imgui_rs::{Condition, Key, StyleColor, Ui, WindowFlags, sys};
+use dear_imgui_rs::{Condition, Key, StyleColor, TabItemFlags, Ui, WindowFlags, sys};
 
 use crate::remote::{ConnectionState, RemoteClient, RemoteConfig};
 
@@ -134,4 +134,135 @@ pub fn draw_remote_modal(
         }
         close
     });
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RootsTab {
+    #[default]
+    Local,
+    Remote,
+}
+
+/// State of the Video Roots dialog.
+#[derive(Debug, Default)]
+pub struct VideoRootsDialog {
+    pub open: bool,
+    /// Tab to bring to the front the next time the dialog draws.
+    select_tab: Option<RootsTab>,
+    remote_input: String,
+}
+
+impl VideoRootsDialog {
+    pub fn show(&mut self, tab: RootsTab) {
+        self.open = true;
+        self.select_tab = Some(tab);
+    }
+}
+
+/// What the Video Roots dialog asked for this frame.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct VideoRootsResult {
+    /// A list was edited, so the open trial's video should be looked up again.
+    pub changed: bool,
+    pub browse_local_requested: bool,
+}
+
+/// One list of roots with Move up / Move down / Remove per row; returns true when it was edited.
+fn draw_root_list(ui: &Ui, roots: &mut Vec<String>) -> bool {
+    let mut changed = false;
+    if roots.is_empty() {
+        ui.text_disabled("No folders yet.");
+    }
+    let mut action: Option<(usize, i32)> = None;
+    for (i, root) in roots.iter().enumerate() {
+        let _id = ui.push_id(i as i32);
+        if ui.small_button("Up") {
+            action = Some((i, -1));
+        }
+        ui.same_line();
+        if ui.small_button("Down") {
+            action = Some((i, 1));
+        }
+        ui.same_line();
+        if ui.small_button("Remove") {
+            action = Some((i, 0));
+        }
+        ui.same_line();
+        ui.text(root);
+    }
+    if let Some((i, step)) = action {
+        match step {
+            0 => {
+                roots.remove(i);
+            }
+            -1 if i > 0 => roots.swap(i, i - 1),
+            1 if i + 1 < roots.len() => roots.swap(i, i + 1),
+            _ => return false,
+        }
+        changed = true;
+    }
+    changed
+}
+
+/// Draw the Video Roots dialog: the folders searched, on this machine and on the server, for the video whose
+/// SHA-256 an export names. Earlier folders are searched first.
+pub fn draw_video_roots_modal(
+    ui: &Ui,
+    dialog: &mut VideoRootsDialog,
+    local: &mut Vec<String>,
+    remote: &mut Vec<String>,
+    remote_connected: bool,
+) -> VideoRootsResult {
+    let mut result = VideoRootsResult::default();
+    let mut is_open = dialog.open;
+    let VideoRootsDialog {
+        select_tab,
+        remote_input,
+        ..
+    } = dialog;
+    draw_modal(ui, "Video Roots", REMOTE_MODAL_WIDTH, &mut is_open, || {
+        ui.text_wrapped(
+            "Folders searched for the source video of an open trial. The video is matched by its SHA-256, \
+             so it can live anywhere under a root.",
+        );
+        let want = *select_tab;
+        let selected = |tab: RootsTab| {
+            if want == Some(tab) {
+                TabItemFlags::SET_SELECTED
+            } else {
+                TabItemFlags::NONE
+            }
+        };
+        if let Some(_bar) = ui.tab_bar("##video_roots_tabs") {
+            if let Some(_tab) = ui.tab_item_with_flags("Local", None, selected(RootsTab::Local)) {
+                result.changed |= draw_root_list(ui, local);
+                ui.separator();
+                if ui.button("Add Folder...") {
+                    result.browse_local_requested = true;
+                }
+            }
+            if let Some(_tab) = ui.tab_item_with_flags("Remote", None, selected(RootsTab::Remote)) {
+                if !remote_connected {
+                    ui.text_disabled("Not connected: folders are searched on the server when you connect.");
+                }
+                result.changed |= draw_root_list(ui, remote);
+                ui.separator();
+                ui.input_text("##remote_root", remote_input)
+                    .hint("/path/on/the/server")
+                    .build();
+                ui.same_line();
+                let path = remote_input.trim().to_string();
+                if ui.with_disabled_if(path.is_empty() || remote.contains(&path), || ui.button("Add")) {
+                    remote.push(path);
+                    remote_input.clear();
+                    result.changed = true;
+                }
+            }
+        }
+        *select_tab = None;
+        ui.separator();
+        ui.button_with_size("Close", [ui.content_region_avail()[0], 0.0])
+    });
+    dialog.open = is_open;
+    result
 }

@@ -87,6 +87,12 @@ pub struct Config {
     pub show_measures: bool,
     #[serde(default = "default_true")]
     pub use_smoothed: bool,
+    /// Folders on this machine searched for the video an export names.
+    #[serde(default)]
+    pub local_video_roots: Vec<String>,
+    /// Folders on the remote server searched for it, sent with each video request.
+    #[serde(default)]
+    pub remote_video_roots: Vec<String>,
     #[serde(default = "default_true")]
     pub free_camera: bool,
     #[serde(default)]
@@ -158,6 +164,8 @@ impl Default for Config {
             show_hand_overlay: false,
             show_measures: false,
             use_smoothed: default_true(),
+            local_video_roots: Vec::new(),
+            remote_video_roots: Vec::new(),
             free_camera: default_true(),
             active_pane: 0,
             flag_layers_enabled: default_flag_layers(),

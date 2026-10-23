@@ -1,51 +1,16 @@
-use std::collections::{BTreeMap, HashMap};
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::collections::BTreeMap;
+use std::path::Path;
 
 use crate::data::geometry::{HandCamera, HandData};
-use crate::data::hand_export::{HandExportError, HandExportRow, MEASURE_COUNT, load_hand_export, parse_hand_export};
+use crate::data::hand_export::{
+    HandExportError, HandExportRow, HexportMetadata, MEASURE_COUNT, load_hand_export_with_meta,
+    parse_hand_export_with_meta,
+};
 use crate::data::mano_model::mano_forward;
 
 pub const FLAG_LAYER_COUNT: usize = 11;
 
 pub type Frame = Vec<HandData>;
-
-/// Resolves the sibling `frames/` directory containing source video images for an export file.
-pub fn resolve_frames_dir<P: AsRef<Path>>(export_file: P) -> PathBuf {
-    let export_path = export_file.as_ref();
-    let stem = export_path
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_default();
-
-    let frames_key = match stem.find("__") {
-        Some(pos1) => match stem[pos1 + 2..].find("__") {
-            Some(pos2) => &stem[..pos1 + 2 + pos2],
-            None => &stem,
-        },
-        None => &stem,
-    };
-
-    let parent = export_path.parent().unwrap_or_else(|| Path::new("."));
-    let grandparent = parent.parent().unwrap_or_else(|| Path::new("."));
-
-    let candidates = [
-        grandparent.join("frames").join(frames_key),
-        parent.join("frames").join(frames_key),
-        parent.join(frames_key),
-        parent.join("frames").join(&stem),
-        grandparent.join("frames").join(&stem),
-    ];
-
-    for candidate in &candidates {
-        if candidate.is_dir() {
-            return candidate.clone();
-        }
-    }
-
-    // Default candidate path even if not yet created on disk
-    parent.join("frames").join(frames_key)
-}
 
 /// One hand's hand-shape measures in one frame, in [`crate::data::MEASURE_COLUMNS`] order.
 #[derive(Debug, Clone, PartialEq)]
@@ -76,9 +41,7 @@ pub struct MeasureSeries {
 #[derive(Debug, Clone)]
 pub struct MeshSequence {
     path: String,
-    /// The local `.hexport` this was read from; `None` for sequences built from bytes, which have no local frame images.
-    export_path: Option<PathBuf>,
-    frame_index: Arc<Mutex<Option<FrameIndex>>>,
+    meta: HexportMetadata,
     /// Index 0 is raw, 1 is smoothed; `smoothed` picks which one the accessors serve.
     frames: [Vec<Frame>; 2],
     frame_numbers: Vec<i32>,
@@ -94,18 +57,18 @@ impl MeshSequence {
         let path_buf = path.as_ref().to_path_buf();
         let path_str = path_buf.to_string_lossy().to_string();
 
-        let rows = load_hand_export(&path_buf)?;
-        Ok(Self::from_rows(path_str, Some(path_buf), rows))
+        let (meta, rows) = load_hand_export_with_meta(&path_buf)?;
+        Ok(Self::from_rows(path_str, meta, rows))
     }
 
     /// Builds a sequence from the bytes of a `.hexport` file held in memory. `label` identifies the source
-    /// (for example the remote path) and no local frame images are looked up.
+    /// (for example the remote path).
     pub fn from_bytes(label: &str, raw: &[u8]) -> Result<Self, HandExportError> {
-        let rows = parse_hand_export(raw, label)?;
-        Ok(Self::from_rows(label.to_string(), None, rows))
+        let (meta, rows) = parse_hand_export_with_meta(raw, label)?;
+        Ok(Self::from_rows(label.to_string(), meta, rows))
     }
 
-    fn from_rows(path_str: String, export_path: Option<PathBuf>, rows: Vec<HandExportRow>) -> Self {
+    fn from_rows(path_str: String, meta: HexportMetadata, rows: Vec<HandExportRow>) -> Self {
         let mut by_frame: BTreeMap<i32, [Frame; 2]> = BTreeMap::new();
         let mut flags_all_by_frame: BTreeMap<i32, [bool; FLAG_LAYER_COUNT]> = BTreeMap::new();
         let mut flags_infant_by_frame: BTreeMap<i32, [bool; FLAG_LAYER_COUNT]> = BTreeMap::new();
@@ -195,8 +158,7 @@ impl MeshSequence {
 
         Self {
             path: path_str,
-            export_path,
-            frame_index: Arc::new(Mutex::new(None)),
+            meta,
             frames,
             frame_numbers,
             frame_measures,
@@ -231,10 +193,9 @@ impl MeshSequence {
         &self.path
     }
 
-    /// The directory holding this sequence's video frame images, looked up afresh so frames that appear
-    /// after the sequence was opened are still found. `None` for sequences without a local export file.
-    pub fn frames_dir(&self) -> Option<PathBuf> {
-        self.export_path.as_deref().map(resolve_frames_dir)
+    /// The export's JSON header, naming the source video by hash.
+    pub fn meta(&self) -> &HexportMetadata {
+        &self.meta
     }
 
     pub fn frame_numbers(&self) -> &[i32] {
@@ -310,65 +271,6 @@ impl MeshSequence {
         };
         list.get(index).is_some_and(|flags| flags[flag_index])
     }
-
-    /// Resolves the filesystem path to the video frame image (`frame_<n>.jpg|jpeg|png`, any zero padding)
-    /// for a sequence playback index. The frames directory is indexed once and rescanned only on a miss,
-    /// so images that appear later are still found.
-    pub fn frame_image_path(&self, index: usize) -> Option<PathBuf> {
-        let frame_num = self.frame_number(index)?;
-        let frames_path = self.frames_dir()?;
-
-        let mut cache = self.frame_index.lock().ok()?;
-        for attempt in 0..2 {
-            if attempt == 1 || cache.as_ref().is_none_or(|c| c.dir != frames_path) {
-                *cache = Some(FrameIndex::scan(&frames_path));
-            }
-            if let Some(found) = cache.as_ref().and_then(|c| c.files.get(&frame_num))
-                && found.metadata().is_ok_and(|m| m.is_file() && m.len() > 0)
-            {
-                return Some(found.clone());
-            }
-        }
-        None
-    }
-}
-
-/// Frame image files found in one directory, keyed by frame number.
-#[derive(Debug)]
-struct FrameIndex {
-    dir: PathBuf,
-    files: HashMap<i32, PathBuf>,
-}
-
-impl FrameIndex {
-    fn scan(dir: &Path) -> Self {
-        let mut files = HashMap::new();
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if let Some(number) = frame_number_of_image(&path) {
-                    files.entry(number).or_insert(path);
-                }
-            }
-        }
-        Self {
-            dir: dir.to_path_buf(),
-            files,
-        }
-    }
-}
-
-/// The frame number of a `frame_<digits>.<jpg|jpeg|png>` file name, ignoring zero padding.
-fn frame_number_of_image(path: &Path) -> Option<i32> {
-    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
-    if !matches!(ext.as_str(), "jpg" | "jpeg" | "png") {
-        return None;
-    }
-    let digits = path.file_stem()?.to_str()?.strip_prefix("frame_")?;
-    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    digits.parse().ok()
 }
 
 /// Computes the mean camera-space depth (Z) across all hands in a frame.

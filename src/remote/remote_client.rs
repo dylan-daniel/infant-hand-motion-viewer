@@ -97,6 +97,17 @@ pub struct ExplorerNode {
     pub quality_score: Option<f32>,
 }
 
+/// What the remote answered when asked for a trial's video.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemoteVideoReply {
+    Found(RemoteVideo),
+    /// No file under the searched roots has the export's hash.
+    Missing {
+        video_hash: String,
+        video_basename: Option<String>,
+    },
+}
+
 /// A trial's source video as downloaded from the remote.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoteVideo {
@@ -502,8 +513,14 @@ impl RemoteClient {
         Ok(data)
     }
 
-    /// Fetch the source video of an export in one request. `Ok(None)` means the remote cannot find it.
-    pub fn fetch_video(&self, remote_export_path: &str, kind: Option<&str>) -> Result<Option<RemoteVideo>, String> {
+    /// Fetch the source video of an export in one request; the remote searches `roots` for the file whose SHA-256
+    /// the export names.
+    pub fn fetch_video(
+        &self,
+        remote_export_path: &str,
+        kind: Option<&str>,
+        roots: &[String],
+    ) -> Result<RemoteVideoReply, String> {
         let (hdr, bytes) = {
             let mut lock = self.session.lock().unwrap();
             let session = lock.as_mut().ok_or_else(|| "Not connected".to_string())?;
@@ -515,18 +532,22 @@ impl RemoteClient {
                 "cmd": "get_video",
                 "path": remote_export_path,
                 "kind": kind,
+                "roots": roots,
             });
             Self::send_command_binary(session, &req)?
         };
 
         let text = |key: &str| hdr.get(key).and_then(|s| s.as_str()).unwrap_or_default().to_string();
         match hdr.get("status").and_then(|s| s.as_str()) {
-            Some("ok") => Ok(Some(RemoteVideo {
+            Some("ok") => Ok(RemoteVideoReply::Found(RemoteVideo {
                 filename: text("filename"),
                 video_hash: text("video_hash"),
                 bytes,
             })),
-            Some("not_found") => Ok(None),
+            Some("not_found") => Ok(RemoteVideoReply::Missing {
+                video_hash: text("video_hash"),
+                video_basename: Some(text("video_basename")).filter(|name| !name.is_empty()),
+            }),
             _ => Err(hdr
                 .get("message")
                 .and_then(|s| s.as_str())

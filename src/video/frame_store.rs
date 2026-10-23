@@ -29,13 +29,25 @@ pub fn plan_size(width: u32, height: u32, frame_count: usize) -> (u32, u32) {
     (even(width), even(height))
 }
 
+/// The video an export names but no root contains.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MissingVideo {
+    pub hash: String,
+    pub basename: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoadStatus {
     Downloading,
+    /// Hashing candidate videos in the configured roots to find the one the export names.
+    Searching {
+        done: usize,
+        total: usize,
+    },
     Decoding,
     Ready,
-    /// The remote has no video for this trial.
-    Missing,
+    /// No video under the configured roots has the export's hash.
+    Missing(MissingVideo),
     Failed(String),
 }
 

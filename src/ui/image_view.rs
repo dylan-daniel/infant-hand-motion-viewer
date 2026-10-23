@@ -4,7 +4,15 @@ use crate::ui::PLAYBACK_BAR_HEIGHT;
 use crate::ui::icons::UiIcons;
 use crate::ui::transport::{Transport, TransportState, draw_transport_bar};
 
+/// Shown in place of the frame when the trial's source video cannot be found.
+pub struct VideoNotice {
+    /// Centered text lines; the first is the heading.
+    pub lines: Vec<String>,
+}
+
 pub struct ImageViewResult {
+    /// The Locate video button was clicked.
+    pub locate_requested: bool,
     pub hovered: bool,
     pub focused: bool,
     pub transport: TransportState,
@@ -22,8 +30,10 @@ pub fn draw_image_window(
     transport: &Transport,
     icons: &UiIcons,
     dock_id: Option<Id>,
+    notice: Option<&VideoNotice>,
 ) -> ImageViewResult {
     let mut result = ImageViewResult {
+        locate_requested: false,
         hovered: false,
         focused: false,
         transport: TransportState {
@@ -73,6 +83,30 @@ pub fn draw_image_window(
                 .uv1([1.0, 1.0])
                 .build();
             result.hovered = ui.is_item_hovered();
+        } else if let Some(notice) = notice {
+            let button = "Locate video...";
+            let button_size = [ui.calc_text_size(button)[0] + 24.0, 0.0];
+            let lines = &notice.lines;
+            let line_height = ui.text_line_height_with_spacing();
+            let total = line_height * (lines.len() as f32 + 2.0);
+            let top = region_pos[1] + (region_height - total) * 0.5;
+            for (i, line) in lines.iter().enumerate() {
+                let width = ui.calc_text_size(line)[0];
+                ui.set_cursor_screen_pos([
+                    region_pos[0] + (region_width - width) * 0.5,
+                    top + line_height * i as f32,
+                ]);
+                if i == 0 {
+                    ui.text(line);
+                } else {
+                    ui.text_disabled(line);
+                }
+            }
+            ui.set_cursor_screen_pos([
+                region_pos[0] + (region_width - button_size[0]) * 0.5,
+                top + line_height * (lines.len() as f32 + 0.5),
+            ]);
+            result.locate_requested = ui.button_with_size(button, button_size);
         } else {
             let note = if transport.has_sequence {
                 "No keypoint image for this frame."

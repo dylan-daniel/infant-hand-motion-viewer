@@ -19,7 +19,6 @@ import re
 import struct
 import sys
 import traceback
-import zlib
 from pathlib import Path
 
 
@@ -28,69 +27,35 @@ def natural_sort_key(s: str):
     return [int(text) if text.isdigit() else text.lower() for text in re.split(r"(\d+)", s)]
 
 
-def read_quality_score(payload: bytes, col_offsets: dict, dtypes: dict):
-    """First-row quality_trial_score (the same on every row of a trial); None when absent, NaN or out of bounds."""
-    offset = col_offsets.get("quality_trial_score")
-    if offset is None or dtypes["quality_trial_score"] != 0 or offset + 4 > len(payload):
+HEADER_SIZE = 20
+HEXPORT_VERSION = 3
+
+
+def read_hexport_header(path: str):
+    """The JSON metadata header of a version 3 .hexport file as a dict; None if unreadable or not version 3."""
+    try:
+        with open(path, "rb") as fp:
+            header = fp.read(HEADER_SIZE)
+            if len(header) < HEADER_SIZE or header[:4] != b"HEXP":
+                return None
+            version, _payload, _compressed, meta_size = struct.unpack("<IIII", header[4:HEADER_SIZE])
+            if version != HEXPORT_VERSION:
+                return None
+            meta = json.loads(fp.read(meta_size).decode("utf-8"))
+        return meta if isinstance(meta, dict) else None
+    except Exception:
         return None
-    score = struct.unpack("<f", payload[offset:offset + 4])[0]
-    return None if math.isnan(score) else score
 
 
 def read_hexport_metadata(path: str):
-    """Quickly read subject, trial and trial quality score (None if absent or NaN) from a .hexport binary file."""
-    try:
-        with open(path, "rb") as fp:
-            header = fp.read(16)
-            if len(header) < 16 or header[:4] != b"HEXP":
-                return None, None, None
-            version, payload_size, compressed_size = struct.unpack("<III", header[4:16])
-            if version != 2 or payload_size == 0 or compressed_size == 0:
-                return None, None, None
-            compressed = fp.read(compressed_size)
-            if len(compressed) < compressed_size:
-                return None, None, None
-        payload = zlib.decompress(compressed)
-        if len(payload) < 8:
-            return None, None, None
-        row_count, column_count = struct.unpack("<II", payload[:8])
-        if row_count == 0:
-            return None, None, None
-        offset = 8
-        ordered_cols = []
-        for _ in range(column_count):
-            if offset + 2 > len(payload):
-                return None, None, None
-            name_len = payload[offset]
-            offset += 1
-            dtype = payload[offset]
-            offset += 1
-            if offset + name_len > len(payload):
-                return None, None, None
-            name = payload[offset:offset + name_len].decode("ascii", errors="replace")
-            offset += name_len
-            ordered_cols.append((name, dtype))
-
-        col_offsets = {}
-        dtypes = dict(ordered_cols)
-        for name, dtype in ordered_cols:
-            col_offsets[name] = offset
-            item_sz = 4 if dtype in (0, 1) else (1 if dtype == 2 else 32)
-            offset += item_sz * row_count
-
-        if "subject" not in col_offsets or "trial" not in col_offsets:
-            return None, None, None
-
-        subj_off = col_offsets["subject"]
-        trial_off = col_offsets["trial"]
-        if subj_off + 32 > len(payload) or trial_off + 32 > len(payload):
-            return None, None, None
-
-        subject = payload[subj_off:subj_off + 32].split(b"\x00")[0].decode("ascii", errors="replace").strip()
-        trial = payload[trial_off:trial_off + 32].split(b"\x00")[0].decode("ascii", errors="replace").strip()
-        return subject, trial, read_quality_score(payload, col_offsets, dtypes)
-    except Exception:
+    """Subject, trial and trial quality score (None if absent or NaN) from a .hexport file's JSON header."""
+    meta = read_hexport_header(path)
+    if not meta:
         return None, None, None
+    score = meta.get("quality_trial_score")
+    if not isinstance(score, (int, float)) or isinstance(score, bool) or math.isnan(score):
+        score = None
+    return meta.get("subject") or None, meta.get("trial") or None, score
 
 
 def _disambiguate_names(files_list):
@@ -209,41 +174,6 @@ def scan_tree(root_path_str: str):
     return tree
 
 
-def find_frames_dir(export_path_str: str):
-    """
-    Locate the frames directory for an export file.
-    Supports candidate layouts in order of priority:
-    1. Pipeline cache layout: <cache_root>/frames/<hash>__<fps>/
-    2. Sibling frames layout: <dir>/frames/<hash>__<fps>/
-    3. Direct folder layout: <dir>/<hash>__<fps>/
-    4. Sibling stem layout: <dir>/frames/<export_stem>/
-    5. Cache stem layout: <cache_root>/frames/<export_stem>/
-    """
-    if not export_path_str:
-        return None
-    export_path = Path(os.path.expanduser(export_path_str))
-    stem = export_path.stem
-    parts = stem.split("__")
-    if len(parts) >= 2:
-        frames_key = f"{parts[0]}__{parts[1]}"
-    else:
-        frames_key = stem
-
-    candidates = [
-        export_path.parent.parent / "frames" / frames_key,
-        export_path.parent / "frames" / frames_key,
-        export_path.parent / frames_key,
-        export_path.parent / "frames" / stem,
-        export_path.parent.parent / "frames" / stem,
-    ]
-
-    for candidate in candidates:
-        if candidate.is_dir():
-            return candidate
-
-    return None
-
-
 def handle_scan_tree(req):
     root = req.get("root", "")
     tree = scan_tree(root)
@@ -268,7 +198,11 @@ def handle_get_file(req, out):
         write_json_line(out, {"id": req["id"], "status": "error", "message": str(e)})
 
 
-def sha256_file(path: Path):
+VIDEO_EXTENSIONS = (".mp4", ".m4v", ".mov", ".mkv", ".avi", ".webm")
+HASH_CACHE_PATH = Path(os.environ.get("VIEWER_HASH_CACHE", Path.home() / ".cache" / "infant_hand_motion_viewer" / "video_hashes.json"))
+
+
+def sha256_file(path):
     digest = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
@@ -276,65 +210,114 @@ def sha256_file(path: Path):
     return digest.hexdigest()
 
 
-_video_hash_cache = {}
+class HashCache:
+    """Remembers path -> (size, mtime_ns, sha256) on disk so a video is not rehashed unless it changed."""
+
+    def __init__(self, path):
+        self.path = Path(path)
+        self.entries = {}
+        self.dirty = False
+        try:
+            with open(self.path, encoding="utf-8") as f:
+                self.entries = json.load(f)
+        except (OSError, ValueError):
+            pass
+
+    def lookup(self, file_path: str, size: int, mtime_ns: int):
+        entry = self.entries.get(file_path)
+        if entry and entry[0] == size and entry[1] == mtime_ns:
+            return entry[2]
+        return None
+
+    def hash_of(self, file_path: str, size: int, mtime_ns: int):
+        cached = self.lookup(file_path, size, mtime_ns)
+        if cached:
+            return cached
+        digest = sha256_file(file_path)
+        self.entries[file_path] = [size, mtime_ns, digest]
+        self.dirty = True
+        return digest
+
+    def save(self):
+        if not self.dirty:
+            return
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(".tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self.entries, f)
+            os.replace(tmp, self.path)
+            self.dirty = False
+        except OSError:
+            pass
 
 
-def search_video_by_hash(video_hash: str, roots):
-    """Last resort: hash every mp4 under `roots` until one matches; results (including misses) are remembered."""
-    key = (video_hash, tuple(str(r) for r in roots))
-    if key in _video_hash_cache:
-        return _video_hash_cache[key]
-    found = None
+_hash_cache = None
+_found_videos = {}
+
+
+def hash_cache():
+    global _hash_cache
+    if _hash_cache is None:
+        _hash_cache = HashCache(HASH_CACHE_PATH)
+    return _hash_cache
+
+
+def list_video_files(roots):
+    """(path, size, mtime_ns) of every video file under `roots`, in root order."""
+    files = []
     for root in roots:
-        for dirpath, _, names in os.walk(root):
+        for dirpath, _, names in os.walk(os.path.expanduser(root)):
             for name in names:
-                if not name.lower().endswith(".mp4"):
+                if not name.lower().endswith(VIDEO_EXTENSIONS):
                     continue
-                candidate = Path(dirpath) / name
+                full = os.path.join(dirpath, name)
                 try:
-                    if candidate.exists() and sha256_file(candidate) == video_hash:
-                        found = candidate
-                        break
+                    st = os.stat(full)
                 except OSError:
                     continue
-            if found:
-                break
-        if found:
-            break
-    _video_hash_cache[key] = found
-    return found
+                if st.st_size > 0:
+                    files.append((full, st.st_size, st.st_mtime_ns))
+    return files
 
 
-def find_video(export_path_str: str):
+def find_video_by_hash(video_hash: str, roots, basename=None, size=None):
     """
-    Locate the source mp4 for an export file via the frames directory's .meta.json (`source_video`).
-    Falls back to searching next to that path for an mp4 whose SHA-256 matches the hash in the frames key.
-    Returns (path, video_hash) or None.
+    Path of a video under `roots` whose SHA-256 equals `video_hash`, or None.
+    Files whose size differs from `size` are skipped without hashing, files named `basename` are hashed first,
+    and every hash is remembered by path, size and modification time.
     """
-    frames_dir = find_frames_dir(export_path_str)
-    if not frames_dir:
+    if not video_hash or not roots:
         return None
-    video_hash = frames_dir.name.split("__")[0]
-    source = None
+    key = (video_hash, tuple(roots))
+    cache = hash_cache()
+    known = _found_videos.get(key)
+    if known:
+        try:
+            st = os.stat(known)
+            if cache.lookup(known, st.st_size, st.st_mtime_ns) == video_hash:
+                return known
+        except OSError:
+            pass
+        del _found_videos[key]
+    files = list_video_files(roots)
+    for full, file_size, mtime in files:
+        if cache.lookup(full, file_size, mtime) == video_hash:
+            _found_videos[key] = full
+            return full
+    candidates = [f for f in files if size is None or f[1] == size]
+    candidates.sort(key=lambda f: os.path.basename(f[0]) != basename)
     try:
-        with open(frames_dir / ".meta.json", encoding="utf-8") as f:
-            meta = json.load(f)
-        video_hash = meta.get("video_hash") or video_hash
-        source = meta.get("source_video")
-    except (OSError, ValueError):
-        pass
-    if source:
-        candidate = Path(os.path.expanduser(source))
-        if candidate.exists():
-            return candidate, video_hash
-    if len(video_hash) != 64:
-        return None
-    roots = []
-    if source:
-        parent = Path(os.path.expanduser(source)).parent
-        roots += [p for p in (parent, parent.parent) if p.is_dir()]
-    found = search_video_by_hash(video_hash, roots)
-    return (found, video_hash) if found else None
+        for full, file_size, mtime in candidates:
+            try:
+                if cache.hash_of(full, file_size, mtime) == video_hash:
+                    _found_videos[key] = full
+                    return full
+            except OSError:
+                continue
+    finally:
+        cache.save()
+    return None
 
 
 DEBUG_VIDEO_ROOT = Path("/HDD16TB/infant_grasp_workspace_outputs")
@@ -349,17 +332,27 @@ def debug_video_path(kind: str, source: Path):
 
 
 def handle_get_video(req, out):
-    export_path_str = req.get("path") or req.get("export_path", "")
-    found = find_video(export_path_str)
-    if not found:
-        write_json_line(out, {"id": req["id"], "status": "not_found"})
+    export_path_str = os.path.expanduser(req.get("path") or req.get("export_path", ""))
+    meta = read_hexport_header(export_path_str)
+    video_hash = (meta or {}).get("video_hash") or ""
+    basename = (meta or {}).get("video_basename")
+    if not meta or not video_hash:
+        write_json_line(out, {"id": req["id"], "status": "error", "message": f"Not a version 3 hand export: {export_path_str}"})
         return
-    video, video_hash = found
+    size = meta.get("video_size_bytes")
+    roots = [r for r in req.get("roots") or [] if isinstance(r, str) and r.strip()]
+    video = find_video_by_hash(video_hash, roots, basename, size if isinstance(size, int) else None)
+    if not video:
+        write_json_line(out, {
+            "id": req["id"], "status": "not_found", "video_hash": video_hash, "video_basename": basename,
+        })
+        return
+    video = Path(video)
     kind = req.get("kind")
     if kind in DEBUG_VIDEO_PREFIX:
         video = debug_video_path(kind, video)
         if not video.exists():
-            write_json_line(out, {"id": req["id"], "status": "not_found"})
+            write_json_line(out, {"id": req["id"], "status": "not_found", "video_hash": video_hash, "video_basename": basename})
             return
         video_hash = DEBUG_VIDEO_PREFIX[kind] + video_hash[2:]
     try:

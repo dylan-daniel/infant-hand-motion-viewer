@@ -8,8 +8,9 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use infant_hand_motion_viewer::remote::{ConnectionState, RemoteClient, RemoteConfig};
+use infant_hand_motion_viewer::remote::{ConnectionState, RemoteClient, RemoteConfig, RemoteVideoReply};
 use infant_hand_motion_viewer::util::WorkerQueue;
+use infant_hand_motion_viewer::video::sha256::sha256_hex;
 
 struct TempDirGuard(PathBuf);
 
@@ -33,12 +34,6 @@ impl Drop for TempDirGuard {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
     }
-}
-
-fn workspace_video(workspace: &TempDirGuard, bytes: &[u8]) -> PathBuf {
-    let path = workspace.path().join("trial.mp4");
-    fs::write(&path, bytes).unwrap();
-    path
 }
 
 #[test]
@@ -69,11 +64,18 @@ fn test_remote_client_local_daemon_e2e() {
     let temp_workspace = TempDirGuard::new("test_remote_workspace");
     let dataset_dir = temp_workspace.path().join("dataset");
     let trial_dir = dataset_dir.join("subject_a").join("trial_01");
-    let frames_dir = trial_dir.join("frames").join("motion__30fps");
-    fs::create_dir_all(&frames_dir).unwrap();
+    fs::create_dir_all(&trial_dir).unwrap();
+    let video_bytes = b"not really an mp4".to_vec();
+    let video_hash = sha256_hex(&video_bytes);
+    // SAFETY: only this test starts the daemon, and nothing else reads the variable.
+    unsafe { std::env::set_var("VIEWER_HASH_CACHE", temp_workspace.path().join("hashes.json")) };
 
     let hexport_path = trial_dir.join("motion__30fps__hash.hexport");
-    let synthetic_bytes = common::generate_synthetic_hexport("subject_a", "trial_01");
+    let synthetic_bytes = common::generate_synthetic_hexport_with_meta(
+        "subject_a",
+        "trial_01",
+        serde_json::json!({ "video_hash": video_hash, "video_basename": "trial.mp4", "video_size_bytes": video_bytes.len() }),
+    );
     fs::write(&hexport_path, &synthetic_bytes).unwrap();
 
     let client = RemoteClient::new();
@@ -115,26 +117,44 @@ fn test_remote_client_local_daemon_e2e() {
     assert_eq!(downloaded_bytes, synthetic_bytes);
     assert!(client.fetch_file_bytes("/definitely/not/a/file.hexport").is_err());
 
-    // Test fetch_video: the video is located through the frames directory's .meta.json
-    let video_bytes = b"not really an mp4".to_vec();
-    let video_path = workspace_video(&temp_workspace, &video_bytes);
-    fs::write(
-        frames_dir.join(".meta.json"),
-        serde_json::json!({ "video_hash": "hash", "source_video": video_path.to_string_lossy() }).to_string(),
-    )
-    .unwrap();
-    let video = client
-        .fetch_video(&hexport_path.to_string_lossy(), None)
-        .unwrap()
-        .expect("video should be found");
+    // Test fetch_video: the video is found by hash under the roots, wherever it lives
+    let roots = vec![temp_workspace.path().to_string_lossy().into_owned()];
+    let export = hexport_path.to_string_lossy();
+    let nested = temp_workspace.path().join("elsewhere").join("deeper");
+    fs::create_dir_all(&nested).unwrap();
+    let video_path = nested.join("renamed.mp4");
+    fs::write(&video_path, &video_bytes).unwrap();
+    let RemoteVideoReply::Found(video) = client.fetch_video(&export, None, &roots).unwrap() else {
+        panic!("video should be found by hash");
+    };
     assert_eq!(video.bytes, video_bytes);
-    assert_eq!(video.filename, "trial.mp4");
-    assert_eq!(video.video_hash, "hash");
-    fs::remove_file(&video_path).unwrap();
-    assert_eq!(client.fetch_video(&hexport_path.to_string_lossy(), None).unwrap(), None);
+    assert_eq!(video.filename, "renamed.mp4");
+    assert_eq!(video.video_hash, video_hash);
+
+    // A same-sized file with other contents is never taken for it
+    fs::write(&video_path, vec![0u8; video_bytes.len()]).unwrap();
+    // A rewrite inside the filesystem's timestamp granularity would look unchanged to the hash cache
+    fs::File::options()
+        .write(true)
+        .open(&video_path)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() + Duration::from_secs(60))
+        .unwrap();
     assert_eq!(
-        client.fetch_video("/definitely/not/a/file.hexport", None).unwrap(),
-        None
+        client.fetch_video(&export, None, &roots).unwrap(),
+        RemoteVideoReply::Missing {
+            video_hash: video_hash.clone(),
+            video_basename: Some("trial.mp4".to_string()),
+        }
+    );
+    assert!(matches!(
+        client.fetch_video(&export, None, &[]).unwrap(),
+        RemoteVideoReply::Missing { .. }
+    ));
+    assert!(
+        client
+            .fetch_video("/definitely/not/a/file.hexport", None, &roots)
+            .is_err()
     );
 
     // Test disconnect

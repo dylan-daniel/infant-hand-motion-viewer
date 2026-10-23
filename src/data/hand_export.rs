@@ -177,6 +177,13 @@ pub fn axis_angle_to_matrix(x: f32, y: f32, z: f32) -> [f32; 9] {
 
 /// Reads all rows from a `.hexport` hand motion export file.
 pub fn load_hand_export<P: AsRef<Path>>(export_path: P) -> Result<Vec<HandExportRow>, HandExportError> {
+    load_hand_export_with_meta(export_path).map(|(_, rows)| rows)
+}
+
+/// As [`load_hand_export`], also returning the file's JSON metadata header.
+pub fn load_hand_export_with_meta<P: AsRef<Path>>(
+    export_path: P,
+) -> Result<(HexportMetadata, Vec<HandExportRow>), HandExportError> {
     let path_str = export_path.as_ref().to_string_lossy().to_string();
     let mut file = File::open(&export_path).map_err(|e| HandExportError::Io {
         path: path_str.clone(),
@@ -189,7 +196,7 @@ pub fn load_hand_export<P: AsRef<Path>>(export_path: P) -> Result<Vec<HandExport
         source: e,
     })?;
 
-    parse_hand_export(&raw, &path_str)
+    parse_hand_export_with_meta(&raw, &path_str)
 }
 
 /// Parses the bytes of a `.hexport` file; `source` names where they came from, for error messages.

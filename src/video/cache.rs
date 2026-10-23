@@ -16,13 +16,6 @@ pub fn is_video_hash(hash: &str) -> bool {
     hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// The video hash a pipeline export is named after: `<video_hash>__<fps>__<params>.hexport`.
-pub fn video_hash_from_export_path(export_path: &str) -> Option<String> {
-    let name = export_path.rsplit(['/', '\\']).next()?;
-    let hash = name.split("__").next()?;
-    is_video_hash(hash).then(|| hash.to_ascii_lowercase())
-}
-
 /// Downloaded source videos kept on disk as `<location>/infant-hand-motion-cache/<video_hash>.mp4`.
 /// Only videos are cached: exports change between pipeline runs, videos do not.
 #[derive(Debug, Clone, PartialEq, Eq)]

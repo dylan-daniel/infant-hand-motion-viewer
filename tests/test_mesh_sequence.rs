@@ -52,80 +52,13 @@ fn test_mesh_sequence_from_bytes_matches_open() {
     assert_eq!(from_memory.frame_count(), from_file.frame_count());
     assert_eq!(from_memory.frame_numbers(), from_file.frame_numbers());
     assert_eq!(from_memory.hand_count(0), from_file.hand_count(0));
-    assert_eq!(from_memory.frame_image_path(0), None);
+    assert_eq!(from_memory.meta(), from_file.meta());
 }
 
 #[test]
 fn test_mesh_sequence_from_bytes_rejects_garbage() {
     assert!(MeshSequence::from_bytes("garbage", b"not a hexport").is_err());
     assert!(MeshSequence::from_bytes("empty", &[]).is_err());
-}
-
-#[test]
-fn test_frame_images_created_after_open_are_found() {
-    use infant_hand_motion_viewer::data::mesh_sequence::resolve_frames_dir;
-
-    let export = TempSyntheticExport::new("SYNTH_SUBJ", "SYNTH_TRIAL");
-    let seq = MeshSequence::open(&export.path).unwrap();
-    assert_eq!(seq.frame_image_path(0), None);
-
-    let frames_dir = resolve_frames_dir(&export.path);
-    std::fs::create_dir_all(&frames_dir).unwrap();
-    let image = frames_dir.join("frame_00001.jpg");
-    std::fs::write(&image, b"jpeg").unwrap();
-
-    assert_eq!(seq.frame_image_path(0), Some(image));
-    assert_eq!(seq.frames_dir(), Some(frames_dir.clone()));
-    let _ = std::fs::remove_dir_all(frames_dir);
-}
-
-#[test]
-fn test_sequence_from_bytes_has_no_frames_dir() {
-    let export = TempSyntheticExport::new("SYNTH_SUBJ", "SYNTH_TRIAL");
-    let raw = std::fs::read(&export.path).unwrap();
-    let seq = MeshSequence::from_bytes("host:/remote.hexport", &raw).unwrap();
-    assert_eq!(seq.frames_dir(), None);
-}
-
-#[test]
-fn test_frame_image_names_match_regardless_of_zero_padding() {
-    use infant_hand_motion_viewer::data::mesh_sequence::resolve_frames_dir;
-
-    for name in ["frame_1.jpg", "frame_01.png", "frame_00001.jpg", "frame_000001.JPEG"] {
-        let export = TempSyntheticExport::new("SYNTH_SUBJ", "SYNTH_TRIAL");
-        let seq = MeshSequence::open(&export.path).unwrap();
-        let frames_dir = resolve_frames_dir(&export.path);
-        std::fs::create_dir_all(&frames_dir).unwrap();
-        let image = frames_dir.join(name);
-        std::fs::write(&image, b"img").unwrap();
-
-        assert_eq!(seq.frame_image_path(0), Some(image), "{name} should match frame 1");
-        let _ = std::fs::remove_dir_all(frames_dir);
-    }
-}
-
-#[test]
-fn test_frame_image_names_that_are_not_frame_files_are_ignored() {
-    use infant_hand_motion_viewer::data::mesh_sequence::resolve_frames_dir;
-
-    let export = TempSyntheticExport::new("SYNTH_SUBJ", "SYNTH_TRIAL");
-    let seq = MeshSequence::open(&export.path).unwrap();
-    let frames_dir = resolve_frames_dir(&export.path);
-    std::fs::create_dir_all(&frames_dir).unwrap();
-    for name in [
-        "00001.jpg",
-        "frame_1a.jpg",
-        "frame_.jpg",
-        "frame_2.jpg",
-        "frame_1.gif",
-        "frame_1.jpg.tmp",
-    ] {
-        std::fs::write(frames_dir.join(name), b"img").unwrap();
-    }
-    std::fs::write(frames_dir.join("frame_1.png"), b"").unwrap();
-
-    assert_eq!(seq.frame_image_path(0), None, "empty and misnamed files must not match");
-    let _ = std::fs::remove_dir_all(frames_dir);
 }
 
 #[test]

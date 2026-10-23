@@ -27,14 +27,17 @@ use infant_hand_motion_viewer::graphics::{
 };
 use infant_hand_motion_viewer::remote::{ConnectionState, RemoteClient, RemoteConfig};
 use infant_hand_motion_viewer::ui::{
-    FileExplorer, MeasuresView, MenuState, SourceMode, Transport, UiIcons, draw_flags_window, draw_image_window,
-    draw_measures_window, draw_menu_bar, draw_remote_modal, draw_viewport_window,
+    FileExplorer, MeasuresView, MenuState, RootsTab, SourceMode, Transport, UiIcons, VideoNotice, VideoRootsDialog,
+    draw_flags_window, draw_image_window, draw_measures_window, draw_menu_bar, draw_remote_modal,
+    draw_video_roots_modal, draw_viewport_window,
 };
 use infant_hand_motion_viewer::util::WorkerQueue;
 use infant_hand_motion_viewer::util::window_placement::{MonitorRect, is_position_reachable};
 use infant_hand_motion_viewer::video::decoder::{ffmpeg_available, missing_ffmpeg_message};
-use infant_hand_motion_viewer::video::loader::{MISSING_VIDEO_MESSAGE, load_remote_video};
-use infant_hand_motion_viewer::video::{FrameStore, LoadStatus};
+use infant_hand_motion_viewer::video::loader::{
+    LocalVideoRequest, RemoteVideoRequest, load_local_video, load_remote_video,
+};
+use infant_hand_motion_viewer::video::{FrameStore, LoadStatus, VideoIdentity};
 
 /// Longest the window stays hidden waiting for its first presented frame.
 const FIRST_FRAME_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
@@ -59,6 +62,7 @@ struct DialogChannels {
     open_file_rx: Option<crossbeam_channel::Receiver<Option<PathBuf>>>,
     data_folder_rx: Option<crossbeam_channel::Receiver<Option<PathBuf>>>,
     video_cache_rx: Option<crossbeam_channel::Receiver<Option<PathBuf>>>,
+    video_root_rx: Option<crossbeam_channel::Receiver<Option<PathBuf>>>,
 }
 
 impl DialogChannels {
@@ -67,6 +71,7 @@ impl DialogChannels {
             open_file_rx: None,
             data_folder_rx: None,
             video_cache_rx: None,
+            video_root_rx: None,
         }
     }
 }
@@ -131,6 +136,7 @@ struct AppState {
     restore_focus_frames: i32,
     explorer: FileExplorer,
     show_remote_modal: bool,
+    video_roots_dialog: VideoRootsDialog,
     measures_view: MeasuresView,
     remote_connect_in_flight: bool,
     remote_config: RemoteConfig,
@@ -160,6 +166,54 @@ struct AppState {
 }
 
 impl AppState {
+    /// Starts looking up and decoding the open trial's video, from the remote when the trial came from there.
+    fn start_video_load(&mut self) {
+        if let Some(video) = self.video.take() {
+            video.cancel();
+        }
+        for view in &mut self.extra_views {
+            view.reset();
+        }
+        self.streamed_frame = None;
+        let Some(seq) = &self.sequence else { return };
+        let meta = seq.meta().clone();
+        if self.current_remote_path.is_empty() {
+            self.video = Some(load_local_video(
+                LocalVideoRequest {
+                    identity: VideoIdentity {
+                        hash: meta.video_hash,
+                        basename: meta.video_basename,
+                        size_bytes: meta.video_size_bytes,
+                    },
+                    roots: self.settings.local_video_roots.iter().map(PathBuf::from).collect(),
+                    hash_index_path: self.config_path.with_file_name("video_hashes.json"),
+                },
+                &self.video_worker,
+            ));
+            return;
+        }
+        let request = |kind| RemoteVideoRequest {
+            client: self.remote_client.clone(),
+            export_path: self.current_remote_path.clone(),
+            kind,
+            video_hash: meta.video_hash.clone(),
+            roots: self.settings.remote_video_roots.clone(),
+        };
+        self.video = Some(load_remote_video(
+            request(None),
+            self.settings.video_cache(),
+            &self.video_worker,
+        ));
+        let kinds: Vec<_> = self.extra_views.iter().map(|view| view.kind).collect();
+        for (view, kind) in self.extra_views.iter_mut().zip(kinds) {
+            view.video = Some(load_remote_video(
+                request(Some(kind)),
+                self.settings.video_cache(),
+                &self.video_worker,
+            ));
+        }
+    }
+
     fn open_sequence(&mut self, source: &OpenSource, start_frame: usize) {
         self.frame_image.clear();
         let (label, opened) = match source {
@@ -491,6 +545,7 @@ impl ApplicationHandler for AppRunner {
             restore_focus_frames: 3,
             explorer,
             show_remote_modal: false,
+            video_roots_dialog: VideoRootsDialog::default(),
             measures_view: MeasuresView::default(),
             remote_connect_in_flight: false,
             remote_config,
@@ -582,7 +637,7 @@ impl ApplicationHandler for AppRunner {
                     state.keys_down.remove(&key);
                 }
 
-                let modal_open = state.show_remote_modal;
+                let modal_open = state.show_remote_modal || state.video_roots_dialog.open;
                 let want_text = state.imgui.io().want_text_input();
 
                 if pressed && !repeat {
@@ -635,7 +690,7 @@ impl ApplicationHandler for AppRunner {
                 if button == MouseButton::Right {
                     let pressed = el_state == ElementState::Pressed;
                     state.right_mouse_down = pressed;
-                    let modal_open = state.show_remote_modal;
+                    let modal_open = state.show_remote_modal || state.video_roots_dialog.open;
                     if pressed && state.viewport_hovered && !modal_open {
                         if state.shift_down {
                             state.panning = true;
@@ -778,6 +833,20 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         state.dialogs.data_folder_rx = None;
     }
 
+    if let Some(ref rx) = state.dialogs.video_root_rx
+        && let Ok(result) = rx.try_recv()
+    {
+        if let Some(folder) = result {
+            let folder = folder.to_string_lossy().into_owned();
+            if !state.settings.local_video_roots.contains(&folder) {
+                state.settings.local_video_roots.push(folder);
+                let _ = state.settings.save(&state.config_path);
+                state.start_video_load();
+            }
+        }
+        state.dialogs.video_root_rx = None;
+    }
+
     if let Some(ref rx) = state.dialogs.video_cache_rx
         && let Ok(result) = rx.try_recv()
     {
@@ -843,28 +912,11 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             view.reset();
         }
         state.streamed_frame = None;
-        if !state.current_remote_path.is_empty() && state.sequence.is_some() {
-            state.video = Some(load_remote_video(
-                state.remote_client.clone(),
-                state.current_remote_path.clone(),
-                None,
-                state.settings.video_cache(),
-                &state.video_worker,
-            ));
-            for view in &mut state.extra_views {
-                view.video = Some(load_remote_video(
-                    state.remote_client.clone(),
-                    state.current_remote_path.clone(),
-                    Some(view.kind),
-                    state.settings.video_cache(),
-                    &state.video_worker,
-                ));
-            }
-        }
+        state.start_video_load();
     }
 
     // Camera WASD / QE movement
-    let modal_open = state.show_remote_modal;
+    let modal_open = state.show_remote_modal || state.video_roots_dialog.open;
     let want_text = state.imgui.io().want_text_input();
     if !want_text && !modal_open {
         let mut forward = 0.0f32;
@@ -965,23 +1017,18 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             state.depth_reference = Some(reference_depth(f0));
         }
 
-        if state.loaded_frame != Some(state.current_frame) && frame_count > 0 {
-            if let Some(frame) = seq.load_frame(state.current_frame) {
-                let prepared = prepare_frame(frame, state.settings.per_track_coloring);
-                state.current_gpu = Some(FrameGpu::new(&state.gpu, &prepared));
-                state.loaded_frame = Some(state.current_frame);
-            }
-
-            if let Some(ref img_path) = seq.frame_image_path(state.current_frame) {
-                state.frame_image.load(&state.gpu, &img_path.to_string_lossy());
-                state.streamed_frame = None;
-            }
+        if state.loaded_frame != Some(state.current_frame)
+            && frame_count > 0
+            && let Some(frame) = seq.load_frame(state.current_frame)
+        {
+            let prepared = prepare_frame(frame, state.settings.per_track_coloring);
+            state.current_gpu = Some(FrameGpu::new(&state.gpu, &prepared));
+            state.loaded_frame = Some(state.current_frame);
         }
 
-        // Remote frames come from the decoded video, shown as soon as each one is decoded.
+        // Frames come from the decoded video, shown as soon as each one is decoded.
         // The previous image stays up meanwhile so scrubbing never flashes blank.
         if let Some(video) = &state.video
-            && seq.frame_image_path(state.current_frame).is_none()
             && let Some(f_num) = seq.frame_number(state.current_frame)
             && f_num > 0
         {
@@ -1085,7 +1132,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
     );
 
     let measures_menu_in = state.settings.show_measures;
-    let (menu_result, explorer_result, viewport_result, image_result, measures_scrub) = {
+    let (menu_result, explorer_result, viewport_result, image_result, measures_scrub, roots_result) = {
         let ui = state.imgui.frame();
 
         let menu_result = draw_menu_bar(ui, menu_state);
@@ -1143,6 +1190,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             None,
         );
 
+        let notice = video_notice(state.video.as_deref());
         let i_res = draw_image_window(
             ui,
             "Frame View###Frame View",
@@ -1152,6 +1200,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             &image_transport,
             &state.icons,
             None,
+            notice.as_ref(),
         );
 
         for view in &state.extra_views {
@@ -1164,6 +1213,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
                 &image_transport,
                 &state.icons,
                 Some(i_res.dock_id),
+                None,
             );
         }
 
@@ -1182,6 +1232,13 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
 
         let explorer_result = state.explorer.draw_explorer_window(ui, &state.icons, None);
 
+        let roots_result = draw_video_roots_modal(
+            ui,
+            &mut state.video_roots_dialog,
+            &mut state.settings.local_video_roots,
+            &mut state.settings.remote_video_roots,
+            state.remote_client.is_connected(),
+        );
         draw_remote_modal(
             ui,
             &mut state.show_remote_modal,
@@ -1204,7 +1261,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             .prepare_render(ui, &state.window)
             .expect("failed to prepare imgui render");
 
-        (menu_result, explorer_result, v_res, i_res, measures_scrub)
+        (menu_result, explorer_result, v_res, i_res, measures_scrub, roots_result)
     };
 
     if let Some(frame) = measures_scrub {
@@ -1248,6 +1305,25 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
     }
     if menu_result.open_remote_modal_requested || explorer_result.change_remote_requested {
         state.show_remote_modal = true;
+    }
+    if image_result.locate_requested || menu_result.open_video_roots_requested {
+        let tab = if state.explorer.mode() == SourceMode::Remote {
+            RootsTab::Remote
+        } else {
+            RootsTab::Local
+        };
+        state.video_roots_dialog.show(tab);
+    }
+    if roots_result.changed {
+        let _ = state.settings.save(&state.config_path);
+        state.start_video_load();
+    }
+    if roots_result.browse_local_requested && state.dialogs.video_root_rx.is_none() {
+        let (tx, rx) = crossbeam_channel::bounded(1);
+        std::thread::spawn(move || {
+            let _ = tx.send(rfd::FileDialog::new().pick_folder());
+        });
+        state.dialogs.video_root_rx = Some(rx);
     }
     if menu_result.disconnect_remote_requested {
         state.remote_client.disconnect();
@@ -1501,9 +1577,24 @@ fn video_status_suffix(video: Option<&FrameStore>) -> String {
             total => format!(" - decoding video ({}/{total})", video.len()),
         },
         LoadStatus::Ready => String::new(),
-        LoadStatus::Missing => format!(" - {MISSING_VIDEO_MESSAGE}"),
+        LoadStatus::Searching { done, total } if total > 0 => format!(" - indexing videos ({done}/{total})"),
+        LoadStatus::Searching { .. } => " - searching for video".to_string(),
+        LoadStatus::Missing(_) => " - video not found".to_string(),
         LoadStatus::Failed(err) => format!(" - video error: {err}"),
     }
+}
+
+/// What the Frame View says when the trial's video is not under any configured root.
+fn video_notice(video: Option<&FrameStore>) -> Option<VideoNotice> {
+    let LoadStatus::Missing(missing) = video?.status() else {
+        return None;
+    };
+    let mut lines = vec!["Source video not found".to_string()];
+    lines.extend(missing.basename.map(|name| format!("Looking for {name}")));
+    if !missing.hash.is_empty() {
+        lines.push(format!("sha256 {}", missing.hash));
+    }
+    Some(VideoNotice { lines })
 }
 
 /// Draws the current frame's hands over the frame image with the WiLoR demo camera, when the hand overlay is on and

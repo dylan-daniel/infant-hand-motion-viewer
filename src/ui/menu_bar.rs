@@ -29,6 +29,7 @@ pub struct MenuResult {
     pub state: MenuState,
     pub export_file_requested: bool,
     pub open_remote_modal_requested: bool,
+    pub open_video_roots_requested: bool,
     pub choose_video_cache_location_requested: bool,
     pub clear_video_cache_requested: bool,
     pub disconnect_remote_requested: bool,
@@ -41,6 +42,7 @@ pub fn draw_menu_bar(ui: &Ui, mut state: MenuState) -> MenuResult {
         state: state.clone(),
         export_file_requested: false,
         open_remote_modal_requested: false,
+        open_video_roots_requested: false,
         choose_video_cache_location_requested: false,
         clear_video_cache_requested: false,
         disconnect_remote_requested: false,
@@ -112,6 +114,9 @@ pub fn draw_menu_bar(ui: &Ui, mut state: MenuState) -> MenuResult {
                          and shaded like its demo renders. Follows Per-Track Coloring for which hands show.",
                     );
                 });
+            }
+            if ui.menu_item("Video Roots...") {
+                result.open_video_roots_requested = true;
             }
             ui.menu("Video Cache", || {
                 ui.checkbox("Cache Videos on Disk", &mut state.video_cache_enabled);
