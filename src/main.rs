@@ -1327,6 +1327,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             state.settings.per_track_coloring,
             state.current_frame,
             &grasp_marks,
+            state.applied_hidden_hands,
             None,
         );
 

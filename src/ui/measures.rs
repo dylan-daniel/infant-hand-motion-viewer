@@ -26,14 +26,14 @@ const SWATCH_PADDING: f32 = 4.0;
 /// The measure series for the open sequence, rebuilt only when the sequence, the track mode or the raw/smoothed choice changes.
 #[derive(Default)]
 pub struct MeasuresView {
-    key: Option<(String, bool, bool)>,
+    key: Option<(String, bool, bool, (bool, bool))>,
     series: Vec<Vec<MeasureSeries>>,
     has_data: bool,
 }
 
 impl MeasuresView {
-    fn sync(&mut self, sequence: &MeshSequence, per_track: bool) {
-        let key = (sequence.path().to_string(), per_track, sequence.is_smoothed());
+    fn sync(&mut self, sequence: &MeshSequence, per_track: bool, hidden: (bool, bool)) {
+        let key = (sequence.path().to_string(), per_track, sequence.is_smoothed(), hidden);
         if self.key.as_ref() == Some(&key) {
             return;
         }
@@ -45,6 +45,9 @@ impl MeasuresView {
         } else {
             Vec::new()
         };
+        for list in &mut self.series {
+            list.retain(|s| !(if s.is_right { hidden.1 } else { hidden.0 }));
+        }
         self.key = Some(key);
     }
 }
@@ -120,6 +123,7 @@ pub fn draw_measures_window(
     per_track: bool,
     current_frame: usize,
     grasp_marks: &[GraspMark],
+    hidden_hands: (bool, bool),
     dock_id: Option<Id>,
 ) -> Option<usize> {
     if !open {
@@ -136,7 +140,7 @@ pub fn draw_measures_window(
                 ui.text_disabled("No sequence loaded");
                 return;
             };
-            view.sync(sequence, per_track);
+            view.sync(sequence, per_track, hidden_hands);
             if !view.has_data {
                 ui.text_disabled("no measure data in this export");
                 return;
