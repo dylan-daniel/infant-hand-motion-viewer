@@ -45,15 +45,13 @@ const PLAYBACK_FPS: f64 = 30.0;
 const SCRUB_INITIAL_DELAY: f64 = 0.25;
 const SCRUB_REPEAT_INTERVAL: f64 = 0.03;
 
-/// Where a sequence to open comes from: a local file, or the bytes of a remote file held in memory.
-enum OpenSource {
-    Local(String),
-    Remote { path: String, bytes: Vec<u8> },
-}
-
-struct PendingOpen {
-    source: OpenSource,
+/// A sequence finished loading on the worker, waiting for the UI thread to swap it in.
+struct OpenedSequence {
+    generation: u64,
+    path: String,
+    remote: bool,
     start_frame: usize,
+    result: Result<MeshSequence, String>,
 }
 
 const VIDEO_CACHE_SIZE_INTERVAL: Duration = Duration::from_secs(2);
@@ -143,7 +141,9 @@ struct AppState {
     remote_client: RemoteClient,
     remote_fetch_worker: Arc<WorkerQueue>,
     remote_open_worker: Arc<WorkerQueue>,
-    pending_remote_open: Arc<Mutex<Option<PendingOpen>>>,
+    opened_sequence: Arc<Mutex<Option<OpenedSequence>>>,
+    /// Counts open requests, so only the newest one's result is installed.
+    open_generation: Arc<AtomicU64>,
     video: Option<Arc<FrameStore>>,
     extra_views: [ExtraView; 2],
     video_worker: WorkerQueue,
@@ -153,7 +153,6 @@ struct AppState {
 
     // Native file dialogs
     dialogs: DialogChannels,
-    pending_open_file: Option<PendingOpen>,
     /// Remote file (host, path, frame) to reopen once the saved connection is back up.
     pending_remote_restore: Option<(String, String, usize)>,
 
@@ -214,61 +213,84 @@ impl AppState {
         }
     }
 
-    fn open_sequence(&mut self, source: &OpenSource, start_frame: usize) {
+    /// Swaps a sequence that finished loading on the worker in for the open one.
+    fn install_sequence(&mut self, opened: OpenedSequence) {
+        let OpenedSequence {
+            generation: _,
+            path,
+            remote,
+            start_frame,
+            result,
+        } = opened;
         self.frame_image.clear();
-        let (label, opened) = match source {
-            OpenSource::Local(path) => (path.as_str(), MeshSequence::open(path)),
-            OpenSource::Remote { path, bytes } => (path.as_str(), MeshSequence::from_bytes(path, bytes)),
-        };
-        self.current_remote_path = match source {
-            OpenSource::Local(_) => String::new(),
-            OpenSource::Remote { path, .. } => path.clone(),
-        };
-        match opened {
-            Ok(seq) => {
-                let frame_count = seq.frame_count();
-                if frame_count > 0 {
-                    self.current_frame = start_frame.min(frame_count - 1);
-                    self.sequence = Some(seq);
-                } else {
-                    eprintln!("No frames found in {label}");
-                    self.sequence = None;
-                    self.current_frame = 0;
-                }
+        self.current_remote_path = if remote { path.clone() } else { String::new() };
+        // Freeing a large sequence takes long enough to hitch a frame, so it goes to another thread
+        let previous = self.sequence.take();
+        match result {
+            Ok(seq) if seq.frame_count() > 0 => {
+                self.current_frame = start_frame.min(seq.frame_count() - 1);
+                self.sequence = Some(seq);
+            }
+            Ok(_) => {
+                eprintln!("No frames found in {path}");
+                self.current_frame = 0;
             }
             Err(err) => {
-                eprintln!("Failed to open {label}: {err}");
-                self.sequence = None;
+                eprintln!("Failed to open {path}: {err}");
                 self.current_frame = 0;
             }
         }
-        self.explorer.set_selected(label);
+        if let Some(previous) = previous {
+            std::thread::spawn(move || drop(previous));
+        }
+        self.explorer.set_selected(&path);
         self.current_gpu = None;
         self.loaded_frame = None;
         self.transform = None;
         self.depth_reference = None;
+
+        self.active_sequence_id.fetch_add(1, Ordering::SeqCst);
+        self.remote_fetch_worker.clear();
+        if let Some(video) = self.video.take() {
+            video.cancel();
+        }
+        for view in &mut self.extra_views {
+            view.reset();
+        }
+        self.streamed_frame = None;
+        self.start_video_load();
     }
 
-    /// Download a remote `.hexport` into memory on a worker and queue it to open once it arrives.
-    fn request_remote_open(&mut self, remote_path: String, start_frame: usize) {
+    /// Loads (and for remote files, downloads) and parses a `.hexport` on a worker, so the UI never waits for it. The
+    /// open sequence stays on screen until the new one is ready; a newer request makes this one's result be dropped.
+    fn request_open(&mut self, path: String, remote: bool, start_frame: usize) {
+        self.explorer.set_selected(&path);
         let client = self.remote_client.clone();
-        let seq_generation = self.active_sequence_id.fetch_add(1, Ordering::SeqCst) + 1;
-        let active_id = Arc::clone(&self.active_sequence_id);
-        let ready = Arc::clone(&self.pending_remote_open);
-        self.remote_open_worker
-            .submit(move || match client.fetch_file_bytes(&remote_path) {
-                Ok(bytes) if active_id.load(Ordering::SeqCst) == seq_generation => {
-                    *ready.lock().unwrap() = Some(PendingOpen {
-                        source: OpenSource::Remote {
-                            path: remote_path,
-                            bytes,
-                        },
-                        start_frame,
-                    });
-                }
-                Ok(_) => {}
-                Err(err) => eprintln!("Failed to fetch {remote_path}: {err}"),
-            });
+        let generation = self.open_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let latest = Arc::clone(&self.open_generation);
+        let ready = Arc::clone(&self.opened_sequence);
+        self.remote_open_worker.submit(move || {
+            let is_current = || latest.load(Ordering::SeqCst) == generation;
+            if !is_current() {
+                return;
+            }
+            let result = if remote {
+                client
+                    .fetch_file_bytes(&path)
+                    .and_then(|bytes| MeshSequence::from_bytes(&path, &bytes).map_err(|err| err.to_string()))
+            } else {
+                MeshSequence::open(&path).map_err(|err| err.to_string())
+            };
+            if is_current() {
+                *ready.lock().unwrap() = Some(OpenedSequence {
+                    generation,
+                    path,
+                    remote,
+                    start_frame,
+                    result,
+                });
+            }
+        });
     }
 
     /// Hide and pin the cursor while dragging the camera, restoring it where it was afterwards.
@@ -553,7 +575,8 @@ impl ApplicationHandler for AppRunner {
             remote_client,
             remote_fetch_worker,
             remote_open_worker,
-            pending_remote_open: Arc::new(Mutex::new(None)),
+            opened_sequence: Arc::new(Mutex::new(None)),
+            open_generation: Arc::new(AtomicU64::new(0)),
             video: None,
             extra_views: [
                 ExtraView::new("wilor", "WiLoR View"),
@@ -564,7 +587,6 @@ impl ApplicationHandler for AppRunner {
             current_remote_path: String::new(),
             active_sequence_id: Arc::new(AtomicU64::new(0)),
             dialogs: DialogChannels::new(),
-            pending_open_file: None,
             pending_remote_restore: None,
             last_frame_time: Instant::now(),
             video_cache_size: 0,
@@ -587,7 +609,7 @@ impl ApplicationHandler for AppRunner {
             && Path::new(&last_folder).is_file()
         {
             let start_frame = app_state.settings.last_frame;
-            app_state.open_sequence(&OpenSource::Local(last_folder), start_frame);
+            app_state.request_open(last_folder, false, start_frame);
         }
 
         // Render the first frame while the window is still hidden; it is shown once that frame is presented
@@ -816,10 +838,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         && let Ok(result) = rx.try_recv()
     {
         if let Some(path) = result {
-            state.pending_open_file = Some(PendingOpen {
-                source: OpenSource::Local(path.to_string_lossy().into_owned()),
-                start_frame: 0,
-            });
+            state.request_open(path.to_string_lossy().into_owned(), false, 0);
         }
         state.dialogs.open_file_rx = None;
     }
@@ -883,7 +902,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         if let Some((host, path, frame)) = state.pending_remote_restore.take()
             && host == remote.host
         {
-            state.request_remote_open(path, frame);
+            state.request_open(path, true, frame);
         }
     }
     if matches!(
@@ -897,24 +916,11 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         }
     }
 
-    if let Some(ready) = state.pending_remote_open.lock().unwrap().take() {
-        state.pending_open_file = Some(ready);
-    }
-
-    // Apply deferred open
-    if let Some(pending) = state.pending_open_file.take() {
-        state.open_sequence(&pending.source, pending.start_frame);
-
-        state.active_sequence_id.fetch_add(1, Ordering::SeqCst);
-        state.remote_fetch_worker.clear();
-        if let Some(video) = state.video.take() {
-            video.cancel();
-        }
-        for view in &mut state.extra_views {
-            view.reset();
-        }
-        state.streamed_frame = None;
-        state.start_video_load();
+    let opened = state.opened_sequence.lock().unwrap().take();
+    if let Some(opened) = opened
+        && opened.generation == state.open_generation.load(Ordering::SeqCst)
+    {
+        state.install_sequence(opened);
     }
 
     // Camera WASD / QE movement
@@ -1377,14 +1383,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
     }
 
     if let Some(open_path) = explorer_result.open_file {
-        if explorer_result.is_remote {
-            state.request_remote_open(open_path, 0);
-        } else {
-            state.pending_open_file = Some(PendingOpen {
-                source: OpenSource::Local(open_path),
-                start_frame: 0,
-            });
-        }
+        state.request_open(open_path, explorer_result.is_remote, 0);
     }
 
     // Echo transport state back from whichever window the user changed it in; unchanged windows just repeat it.
