@@ -20,7 +20,7 @@ use dear_imgui_winit::{HiDpiMode, WinitPlatform};
 use infant_hand_motion_viewer::assets;
 use infant_hand_motion_viewer::config::Config;
 use infant_hand_motion_viewer::data::{
-    GraspEventSet, GraspMark, MeshSequence, Transform, compute_transform, reference_depth,
+    GraspEventSet, GraspMark, HandData, MeshSequence, Transform, compute_transform, reference_depth,
 };
 use infant_hand_motion_viewer::graphics::{
     Camera, FrameGpu, Framebuffer, FreeCamera, Gpu, HandOverlay, ImageTexture, OrbitCamera, Renderer, SceneRender,
@@ -143,6 +143,8 @@ struct AppState {
     grasp_dialog: GraspEventsDialog,
     grasp_loaded: Vec<LoadedSource>,
     grasp_set: GraspEventSet,
+    /// (left, right) hidden in the scene and overlay as of the last prepared frame.
+    applied_hidden_hands: (bool, bool),
     grasp_ready: Arc<Mutex<Option<Vec<LoadedSource>>>>,
     /// Counts grasp-event loads, so only the newest one's result is installed.
     grasp_generation: Arc<AtomicU64>,
@@ -599,6 +601,7 @@ impl ApplicationHandler for AppRunner {
             grasp_dialog: GraspEventsDialog::default(),
             grasp_loaded: Vec::new(),
             grasp_set: GraspEventSet::default(),
+            applied_hidden_hands: (false, false),
             grasp_ready: Arc::new(Mutex::new(None)),
             grasp_generation: Arc::new(AtomicU64::new(0)),
             measures_view: MeasuresView::default(),
@@ -1077,6 +1080,12 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
     let frame_count = state.sequence.as_ref().map(|s| s.frame_count()).unwrap_or(0);
 
     if let Some(ref seq) = state.sequence {
+        let hidden = hidden_hands(&state.grasp_set, seq, state.settings.hide_unused_hands);
+        if hidden != state.applied_hidden_hands {
+            state.applied_hidden_hands = hidden;
+            state.loaded_frame = None;
+            state.overlay_key = None;
+        }
         if state.transform.is_none()
             && frame_count > 0
             && let Some(f0) = seq.load_frame(0)
@@ -1089,7 +1098,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             && frame_count > 0
             && let Some(frame) = seq.load_frame(state.current_frame)
         {
-            let prepared = prepare_frame(frame, state.settings.per_track_coloring);
+            let prepared = prepare_frame(&shown_hands(frame, hidden), state.settings.per_track_coloring);
             state.current_gpu = Some(FrameGpu::new(&state.gpu, &prepared));
             state.loaded_frame = Some(state.current_frame);
         }
@@ -1639,6 +1648,30 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
     }
 }
 
+/// Which sides, `(left, right)`, the Grasp pane's "hide unused hands" hides for the open trial: those its CSV row does
+/// not mark as used. Nothing is hidden when the option is off or the trial has no row.
+fn hidden_hands(grasp: &GraspEventSet, seq: &MeshSequence, hide_unused: bool) -> (bool, bool) {
+    let meta = seq.meta();
+    match grasp.row(&meta.subject, &meta.trial) {
+        Some(row) if hide_unused => row.unused_sides(),
+        _ => (false, false),
+    }
+}
+
+/// The frame's hands minus the hidden sides.
+fn shown_hands(hands: &[HandData], hidden: (bool, bool)) -> std::borrow::Cow<'_, [HandData]> {
+    match hidden {
+        (false, false) => std::borrow::Cow::Borrowed(hands),
+        (left, right) => std::borrow::Cow::Owned(
+            hands
+                .iter()
+                .filter(|hand| !(if hand.is_right { right } else { left }))
+                .cloned()
+                .collect(),
+        ),
+    }
+}
+
 /// What the hand overlay's last render was built from; the overlay is redrawn only when one of these changes.
 #[derive(Clone, Copy, PartialEq)]
 struct OverlayKey {
@@ -1772,7 +1805,12 @@ fn sync_hand_overlay(state: &mut AppState) -> Option<TextureId> {
             .map_or((size[0], size[1]), |camera| (camera.img_w.max(1), camera.img_h.max(1)));
         let demo_focal = overlay_focal_length(fit_w, fit_h);
         let render_focal = demo_focal * size[0] as f32 / fit_w as f32;
-        let meshes = prepare_overlay_hands(&state.gpu, hands, key.per_track_coloring, demo_focal);
+        let meshes = prepare_overlay_hands(
+            &state.gpu,
+            &shown_hands(hands, state.applied_hidden_hands),
+            key.per_track_coloring,
+            demo_focal,
+        );
         state
             .hand_overlay
             .render(&state.gpu, image_view, size, render_focal, &meshes);

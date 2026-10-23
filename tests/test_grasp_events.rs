@@ -141,3 +141,14 @@ fn the_real_batches_file_loads_when_present() {
     let both = file.row("KA63", "T5_BabyView").unwrap();
     assert_eq!((both.left.used, both.right.used), (Some(false), Some(false)));
 }
+
+#[test]
+fn unused_sides_are_those_not_marked_true() {
+    let file =
+        parse("A,T1,,true,false,,,,,,,\nA,T2,,false,true,,,,,,,\nA,T3,,,,,,,,,,\nA,T4,,true,true,,,,,,,\n").unwrap();
+    let sides = |trial| file.row("A", trial).unwrap().unused_sides();
+    assert_eq!(sides("T1"), (false, true));
+    assert_eq!(sides("T2"), (true, false));
+    assert_eq!(sides("T3"), (true, true));
+    assert_eq!(sides("T4"), (false, false));
+}

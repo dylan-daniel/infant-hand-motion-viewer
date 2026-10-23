@@ -131,6 +131,11 @@ impl GraspRow {
         &self.events[kind as usize]
     }
 
+    /// `(left, right)`: whether that hand is not marked as used (false or blank).
+    pub fn unused_sides(&self) -> (bool, bool) {
+        (self.left.used != Some(true), self.right.used != Some(true))
+    }
+
     /// The events that have a time and land inside a video of `frame_count` frames at `fps`. Times may be in any order.
     pub fn marks(&self, fps: f64, frame_count: usize) -> Vec<GraspMark> {
         if !(fps.is_finite() && fps > 0.0) {
