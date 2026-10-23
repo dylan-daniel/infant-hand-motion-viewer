@@ -9,7 +9,7 @@ use serde::Deserialize;
 use thiserror::Error;
 
 const MAGIC: [u8; 4] = *b"HEXP";
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 const HEADER_SIZE: usize = 20;
 const STRING_FIELD_WIDTH: usize = 32;
 
@@ -31,8 +31,6 @@ pub enum HandExportError {
     DecompressionFailed { path: String, reason: String },
     #[error("Hand export file is missing expected column '{column}': {path}")]
     MissingColumn { column: String, path: String },
-    #[error("Old export layout (single quality_trial_score), please re-export: {0}")]
-    LegacyLayout(String),
     #[error("Malformed schema or payload: {0}")]
     Malformed(String),
 }
@@ -231,9 +229,6 @@ pub fn parse_hand_export_with_meta(
     let meta_size = u32::from_le_bytes(raw[16..20].try_into().unwrap()) as usize;
     if raw.len() < HEADER_SIZE + meta_size + compressed_size {
         return Err(HandExportError::Truncated(path_str));
-    }
-    if is_legacy_layout(&raw[HEADER_SIZE..HEADER_SIZE + meta_size]) {
-        return Err(HandExportError::LegacyLayout(path_str));
     }
     let meta = parse_meta_json(&raw[HEADER_SIZE..HEADER_SIZE + meta_size])
         .ok_or_else(|| HandExportError::Malformed(format!("Invalid metadata header: {path_str}")))?;
@@ -483,11 +478,6 @@ fn finite_score<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option<f32>, 
     Ok(Option::<f32>::deserialize(de)?.filter(|score| score.is_finite()))
 }
 
-/// Exports from before the score was split per hand carry a single `quality_trial_score`; they are not supported.
-fn is_legacy_layout(bytes: &[u8]) -> bool {
-    serde_json::from_slice::<serde_json::Value>(bytes).is_ok_and(|meta| meta.get("quality_trial_score").is_some())
-}
-
 fn parse_meta_json(bytes: &[u8]) -> Option<HexportMetadata> {
     serde_json::from_slice(bytes).ok()
 }
@@ -503,9 +493,6 @@ pub fn read_hexport_metadata<P: AsRef<Path>>(path: P) -> Option<HexportMetadata>
     let meta_size = u32::from_le_bytes(header[16..20].try_into().unwrap()) as usize;
     let mut meta = vec![0u8; meta_size];
     file.read_exact(&mut meta).ok()?;
-    if is_legacy_layout(&meta) {
-        return None;
-    }
     let meta = parse_meta_json(&meta)?;
     (!meta.subject.is_empty() && !meta.trial.is_empty()).then_some(meta)
 }

@@ -31,7 +31,7 @@ pub fn generate_synthetic_hexport_with_scores(
     )
 }
 
-/// Wraps a raw columnar `payload` into a version 3 file whose JSON header is `meta` plus the subject and trial.
+/// Wraps a raw columnar `payload` into a version 4 file whose JSON header is `meta` plus the subject and trial.
 pub fn wrap_hexport(payload: &[u8], subject: &str, trial: &str, mut meta: serde_json::Value) -> Vec<u8> {
     meta["subject"] = subject.into();
     meta["trial"] = trial.into();
@@ -41,7 +41,7 @@ pub fn wrap_hexport(payload: &[u8], subject: &str, trial: &str, mut meta: serde_
     let compressed = encoder.finish().unwrap();
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"HEXP");
-    bytes.extend_from_slice(&3u32.to_le_bytes());
+    bytes.extend_from_slice(&4u32.to_le_bytes());
     bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
     bytes.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
     bytes.extend_from_slice(&(meta_bytes.len() as u32).to_le_bytes());

@@ -32,11 +32,11 @@ def natural_sort_key(s: str):
 
 
 HEADER_SIZE = 20
-HEXPORT_VERSION = 3
+HEXPORT_VERSION = 4
 
 
 def read_hexport_header(path: str):
-    """The JSON metadata header of a version 3 .hexport file as a dict; None if unreadable or not version 3."""
+    """The JSON metadata header of a version 4 .hexport file as a dict; None if unreadable or not version 4."""
     try:
         with open(path, "rb") as fp:
             header = fp.read(HEADER_SIZE)
@@ -60,9 +60,9 @@ def _score(value):
 
 def read_hexport_metadata(path: str):
     """Subject, trial and the left and right trial quality scores (None if null, absent or NaN) from a .hexport
-    file's JSON header. Exports with the old single quality_trial_score are not supported and read as unknown."""
+    file's JSON header."""
     meta = read_hexport_header(path)
-    if not meta or "quality_trial_score" in meta:
+    if not meta:
         return None, None, None, None
     return (
         meta.get("subject") or None,
@@ -429,7 +429,7 @@ def handle_get_video(req, reply):
     video_hash = (meta or {}).get("video_hash") or ""
     basename = (meta or {}).get("video_basename")
     if not meta or not video_hash:
-        reply.json({"id": req["id"], "status": "error", "message": f"Not a version 3 hand export: {export_path_str}"})
+        reply.json({"id": req["id"], "status": "error", "message": f"Not a version 4 hand export: {export_path_str}"})
         return
     size = meta.get("video_size_bytes")
     roots = [r for r in req.get("roots") or [] if isinstance(r, str) and r.strip()]

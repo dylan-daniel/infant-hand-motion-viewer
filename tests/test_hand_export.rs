@@ -93,29 +93,7 @@ fn test_metadata_reads_both_hand_scores_and_ignores_missing_or_nan() {
 }
 
 #[test]
-fn test_old_single_score_exports_are_not_supported() {
-    use common::generate_synthetic_hexport_with_meta;
-    use infant_hand_motion_viewer::data::{HandExportError, parse_hand_export};
-
-    for score in [serde_json::json!(0.8), serde_json::Value::Null] {
-        let bytes = generate_synthetic_hexport_with_meta(
-            "S",
-            "T1",
-            serde_json::json!({ "quality_trial_score": score, "video_hash": "0".repeat(64) }),
-        );
-        assert!(matches!(
-            parse_hand_export(&bytes, "t"),
-            Err(HandExportError::LegacyLayout(_))
-        ));
-        let path = std::env::temp_dir().join(format!("legacy_meta_{}.hexport", std::process::id()));
-        std::fs::write(&path, &bytes).unwrap();
-        assert!(read_hexport_metadata(&path).is_none());
-        std::fs::remove_file(&path).unwrap();
-    }
-}
-
-#[test]
-fn test_v3_metadata_header_carries_video_identity_and_ignores_unknown_keys() {
+fn test_v4_metadata_header_carries_video_identity_and_ignores_unknown_keys() {
     use common::generate_synthetic_hexport_with_meta;
     use infant_hand_motion_viewer::data::hand_export::parse_hand_export_with_meta;
 
@@ -156,12 +134,11 @@ fn test_older_versions_are_rejected() {
     use infant_hand_motion_viewer::data::{HandExportError, parse_hand_export};
 
     let mut bytes = common::generate_synthetic_hexport("S", "T");
-    for version in [1u32, 2] {
+    for version in [1u32, 2, 3] {
         bytes[4..8].copy_from_slice(&version.to_le_bytes());
-        assert!(matches!(
-            parse_hand_export(&bytes, "t"),
-            Err(HandExportError::UnsupportedVersion { .. })
-        ));
+        let err = parse_hand_export(&bytes, "t").unwrap_err();
+        assert!(matches!(err, HandExportError::UnsupportedVersion { expected: 4, .. }));
+        assert!(err.to_string().contains("expected 4"));
     }
 }
 
