@@ -1132,7 +1132,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
     );
 
     let measures_menu_in = state.settings.show_measures;
-    let (menu_result, explorer_result, viewport_result, image_result, measures_scrub, roots_result) = {
+    let (menu_result, explorer_result, viewport_result, image_result, extra_results, measures_scrub, roots_result) = {
         let ui = state.imgui.frame();
 
         let menu_result = draw_menu_bar(ui, menu_state);
@@ -1203,8 +1203,9 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             notice.as_ref(),
         );
 
+        let mut extra_results = Vec::new();
         for view in &state.extra_views {
-            draw_image_window(
+            extra_results.push(draw_image_window(
                 ui,
                 &format!("{}###{}", view.title, view.title),
                 view.texture_id,
@@ -1214,7 +1215,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
                 &state.icons,
                 Some(i_res.dock_id),
                 None,
-            );
+            ));
         }
 
         draw_flags_window(ui, "Flags###Flags", &mut state.settings.flag_layers_enabled, None);
@@ -1222,7 +1223,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         let measures_scrub = draw_measures_window(
             ui,
             "Hand Measures###Hand Measures",
-            &mut state.settings.show_measures,
+            state.settings.show_measures,
             &mut state.measures_view,
             state.sequence.as_ref(),
             state.settings.per_track_coloring,
@@ -1261,13 +1262,17 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             .prepare_render(ui, &state.window)
             .expect("failed to prepare imgui render");
 
-        (menu_result, explorer_result, v_res, i_res, measures_scrub, roots_result)
+        (
+            menu_result,
+            explorer_result,
+            v_res,
+            i_res,
+            extra_results,
+            measures_scrub,
+            roots_result,
+        )
     };
 
-    if let Some(frame) = measures_scrub {
-        state.current_frame = frame;
-        state.playing = false;
-    }
     if menu_result.state.show_measures != measures_menu_in {
         state.settings.show_measures = menu_result.state.show_measures;
     }
@@ -1380,21 +1385,37 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         }
     }
 
-    // Echo transport state back
-    let echo = if state.active_pane == 1 {
-        &image_result.transport
-    } else {
-        &viewport_result.transport
+    // Echo transport state back from whichever window the user changed it in; unchanged windows just repeat it.
+    let current = (state.current_frame, state.playing, state.playback_speed);
+    let changed = |t: &&infant_hand_motion_viewer::ui::TransportState| {
+        t.scrubbing || (t.current_frame, t.playing, t.speed) != current
     };
+    let image_transports = std::iter::once(&image_result)
+        .chain(&extra_results)
+        .map(|r| &r.transport);
+    let echo = image_transports
+        .chain(std::iter::once(&viewport_result.transport))
+        .find(changed)
+        .unwrap_or(if state.active_pane == 1 {
+            &image_result.transport
+        } else {
+            &viewport_result.transport
+        });
     if has_sequence {
         state.current_frame = echo.current_frame;
         state.playing = echo.playing;
         state.scrubbing = echo.scrubbing;
         state.playback_speed = echo.speed;
     }
+    // Dragging a measure plot wins over the transport echo above, and holds playback like the scrubber does
+    if let Some(frame) = measures_scrub {
+        state.current_frame = frame;
+        state.playing = false;
+        state.scrubbing = true;
+    }
     if viewport_result.focused {
         state.active_pane = 0;
-    } else if image_result.focused {
+    } else if image_result.focused || extra_results.iter().any(|r| r.focused) {
         state.active_pane = 1;
     }
 

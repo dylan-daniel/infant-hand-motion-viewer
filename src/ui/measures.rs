@@ -15,6 +15,8 @@ pub const MEASURE_TITLES: [&str; MEASURE_COUNT] = [
 
 const APERTURE_PLOT_HEIGHT: f32 = 170.0;
 const PLOT_HEIGHT: f32 = 100.0;
+/// Space above and below a legend swatch, the same as the Flags window's.
+const SWATCH_PADDING: f32 = 4.0;
 
 /// The measure series for the open sequence, rebuilt only when the sequence, the track mode or the raw/smoothed choice changes.
 #[derive(Default)]
@@ -107,14 +109,14 @@ fn series_color(series: &MeasureSeries) -> [f32; 4] {
 pub fn draw_measures_window(
     ui: &Ui,
     title: &str,
-    open: &mut bool,
+    open: bool,
     view: &mut MeasuresView,
     sequence: Option<&MeshSequence>,
     per_track: bool,
     current_frame: usize,
     dock_id: Option<Id>,
 ) -> Option<usize> {
-    if !*open {
+    if !open {
         return None;
     }
     if let Some(did) = dock_id {
@@ -123,7 +125,6 @@ pub fn draw_measures_window(
     let mut scrubbed = None;
     dear_imgui_rs::Window::new(ui, title)
         .flags(WindowFlags::empty())
-        .opened(open)
         .build(|| {
             let Some(sequence) = sequence else {
                 ui.text_disabled("No sequence loaded");
@@ -157,7 +158,22 @@ fn draw_legend(ui: &Ui, series: &[MeasureSeries]) {
         if i > 0 {
             ui.same_line();
         }
-        ui.text_colored(series_color(s), format!("\u{25A0} {}", s.label));
+        let color = series_color(s);
+        let pos = ui.cursor_screen_pos();
+        let line_h = ui.frame_height();
+        let swatch_w = line_h - SWATCH_PADDING * 2.0;
+        ui.get_window_draw_list()
+            .add_rect(
+                [pos[0], pos[1] + SWATCH_PADDING],
+                [pos[0] + swatch_w, pos[1] + line_h - SWATCH_PADDING],
+                color,
+            )
+            .filled(true)
+            .rounding(2.0)
+            .build();
+        ui.dummy([swatch_w, line_h]);
+        ui.same_line();
+        ui.text_colored(color, &s.label);
     }
 }
 
@@ -236,7 +252,7 @@ fn draw_plot(
         .build();
 
     let mouse_x = ui.io().mouse_pos()[0];
-    if hovered && !active {
+    if hovered {
         let frame = x_to_frame(mouse_x, frame_count, min[0], max[0]);
         let x = frame_to_x(frame, frame_count, min[0], max[0]);
         draw_list
