@@ -173,6 +173,7 @@ fn draw_legend(ui: &Ui, series: &[MeasureSeries]) {
             .build();
         ui.dummy([swatch_w, line_h]);
         ui.same_line();
+        ui.align_text_to_frame_padding();
         ui.text_colored(color, &s.label);
     }
 }
