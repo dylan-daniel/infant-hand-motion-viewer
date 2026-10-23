@@ -2,7 +2,8 @@ use dear_imgui_rs::{Condition, DrawListMut, Id, TreeNodeFlags, Ui, WindowFlags};
 
 use crate::data::{Certainty, GraspEventKind, GraspMark, GraspRow, HandGrip};
 
-const ARROW_HALF_WIDTH: f32 = 5.0;
+/// Side of the equilateral arrow triangles.
+const ARROW_SIDE: f32 = 8.0;
 const DASH: f32 = 4.0;
 
 /// Okabe-Ito orange, sky blue and reddish purple: distinct under the common color blindnesses and readable on
@@ -52,18 +53,11 @@ fn mark_color(mark: &GraspMark) -> [f32; 4] {
 pub fn draw_arrows(draw_list: &DrawListMut<'_>, x: f32, top: f32, bottom: f32, mark: &GraspMark) {
     let style = mark_style(mark.certainty.as_ref());
     let color = mark_color(mark);
-    let length = (bottom - top) * 0.45;
+    let half = ARROW_SIDE * 0.5;
+    let length = ARROW_SIDE * 3f32.sqrt() * 0.5;
     let arrows = [
-        (
-            [x - ARROW_HALF_WIDTH, top],
-            [x + ARROW_HALF_WIDTH, top],
-            [x, top + length],
-        ),
-        (
-            [x - ARROW_HALF_WIDTH, bottom],
-            [x + ARROW_HALF_WIDTH, bottom],
-            [x, bottom - length],
-        ),
+        ([x - half, top], [x + half, top], [x, top + length]),
+        ([x - half, bottom], [x + half, bottom], [x, bottom - length]),
     ];
     for (a, b, tip) in arrows {
         let triangle = draw_list.add_triangle(a, b, tip, color);

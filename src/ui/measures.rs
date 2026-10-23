@@ -18,6 +18,8 @@ pub const MEASURE_TITLES: [&str; MEASURE_COUNT] = [
 
 const APERTURE_PLOT_HEIGHT: f32 = 170.0;
 const PLOT_HEIGHT: f32 = 100.0;
+/// Horizontal space kept between the plot box and the first and last frame.
+const PLOT_MARGIN: f32 = 4.0;
 /// Space above and below a legend swatch, the same as the Flags window's.
 const SWATCH_PADDING: f32 = 4.0;
 
@@ -208,6 +210,8 @@ fn draw_plot(
     draw_list.add_rect(min, max, super::rgba(80, 80, 90, 255)).build();
     let _clip = draw_list.push_clip_rect(min, max, true);
 
+    // Frames map inside the box so a line on the first or last frame is not cut by its border or clip
+    let (x_min, x_max) = (min[0] + PLOT_MARGIN, max[0] - PLOT_MARGIN);
     let range = value_range(series);
     match range {
         Some((lo, hi)) => {
@@ -220,7 +224,7 @@ fn draw_plot(
             for s in series {
                 let color = series_color(s);
                 for run in finite_runs(&s.values) {
-                    let point = |&(f, v): &(usize, f32)| [frame_to_x(f, frame_count, min[0], max[0]), y_of(v)];
+                    let point = |&(f, v): &(usize, f32)| [frame_to_x(f, frame_count, x_min, x_max), y_of(v)];
                     if let [only] = run.as_slice() {
                         let [x, y] = point(only);
                         draw_list.add_circle([x, y], 2.0, color).filled(true).build();
@@ -252,11 +256,11 @@ fn draw_plot(
     }
 
     for mark in grasp_marks {
-        let x = frame_to_x(mark.frame, frame_count, min[0], max[0]);
+        let x = frame_to_x(mark.frame, frame_count, x_min, x_max);
         draw_vline(&draw_list, x, min[1], max[1], mark);
     }
 
-    let cursor_x = frame_to_x(current_frame, frame_count, min[0], max[0]);
+    let cursor_x = frame_to_x(current_frame, frame_count, x_min, x_max);
     draw_list
         .add_line([cursor_x, min[1]], [cursor_x, max[1]], super::rgba(255, 220, 80, 255))
         .thickness(1.5)
@@ -264,8 +268,8 @@ fn draw_plot(
 
     let mouse_x = ui.io().mouse_pos()[0];
     if hovered {
-        let frame = x_to_frame(mouse_x, frame_count, min[0], max[0]);
-        let x = frame_to_x(frame, frame_count, min[0], max[0]);
+        let frame = x_to_frame(mouse_x, frame_count, x_min, x_max);
+        let x = frame_to_x(frame, frame_count, x_min, x_max);
         draw_list
             .add_line([x, min[1]], [x, max[1]], super::rgba(255, 255, 255, 70))
             .build();
@@ -284,5 +288,5 @@ fn draw_plot(
     }
 
     ui.spacing();
-    active.then(|| x_to_frame(mouse_x, frame_count, min[0], max[0]))
+    active.then(|| x_to_frame(mouse_x, frame_count, x_min, x_max))
 }
