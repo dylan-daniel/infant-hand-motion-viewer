@@ -362,6 +362,7 @@ impl FileExplorer {
                 subject,
                 trial,
                 quality_score,
+                ..
             }) = read_hexport_metadata(path)
             {
                 let display_name = if !fps_tag.is_empty() {

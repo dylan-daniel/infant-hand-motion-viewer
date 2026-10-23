@@ -88,3 +88,53 @@ fn test_metadata_reads_trial_quality_score_and_ignores_missing_or_nan() {
     assert_eq!(read(Some(f32::NAN)), None);
     assert_eq!(read(None), None);
 }
+
+#[test]
+fn test_v3_metadata_header_carries_video_identity_and_ignores_unknown_keys() {
+    use common::generate_synthetic_hexport_with_meta;
+    use infant_hand_motion_viewer::data::hand_export::parse_hand_export_with_meta;
+
+    let hash = "ab".repeat(32);
+    let bytes = generate_synthetic_hexport_with_meta(
+        "S",
+        "T1",
+        serde_json::json!({
+            "video_hash": hash,
+            "fps_key": "30fps",
+            "video_basename": "clip.mp4",
+            "video_size_bytes": 1234,
+            "quality_trial_score": 0.5,
+            "future_key": { "nested": [1, 2] },
+        }),
+    );
+    let (meta, rows) = parse_hand_export_with_meta(&bytes, "t").unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(meta.video_hash, hash);
+    assert_eq!(meta.fps_key.as_deref(), Some("30fps"));
+    assert_eq!(meta.video_basename.as_deref(), Some("clip.mp4"));
+    assert_eq!(meta.video_size_bytes, Some(1234));
+    assert_eq!(meta.quality_score, Some(0.5));
+    assert_eq!((meta.subject.as_str(), meta.trial.as_str()), ("S", "T1"));
+
+    let nulls = generate_synthetic_hexport_with_meta(
+        "S",
+        "T1",
+        serde_json::json!({ "video_hash": hash, "video_basename": null, "video_size_bytes": null }),
+    );
+    let (meta, _) = parse_hand_export_with_meta(&nulls, "t").unwrap();
+    assert_eq!((meta.video_basename, meta.video_size_bytes), (None, None));
+}
+
+#[test]
+fn test_older_versions_are_rejected() {
+    use infant_hand_motion_viewer::data::{HandExportError, parse_hand_export};
+
+    let mut bytes = common::generate_synthetic_hexport("S", "T");
+    for version in [1u32, 2] {
+        bytes[4..8].copy_from_slice(&version.to_le_bytes());
+        assert!(matches!(
+            parse_hand_export(&bytes, "t"),
+            Err(HandExportError::UnsupportedVersion { .. })
+        ));
+    }
+}

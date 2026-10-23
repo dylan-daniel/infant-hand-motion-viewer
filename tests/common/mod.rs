@@ -15,6 +15,34 @@ pub fn generate_synthetic_hexport(subject: &str, trial: &str) -> Vec<u8> {
 
 /// As `generate_synthetic_hexport`, with a `quality_trial_score` column when `quality` is given.
 pub fn generate_synthetic_hexport_with_quality(subject: &str, trial: &str, quality: Option<f32>) -> Vec<u8> {
+    generate_synthetic_hexport_with_meta(
+        subject,
+        trial,
+        serde_json::json!({ "quality_trial_score": quality, "video_hash": "0".repeat(64) }),
+    )
+}
+
+/// Wraps a raw columnar `payload` into a version 3 file whose JSON header is `meta` plus the subject and trial.
+pub fn wrap_hexport(payload: &[u8], subject: &str, trial: &str, mut meta: serde_json::Value) -> Vec<u8> {
+    meta["subject"] = subject.into();
+    meta["trial"] = trial.into();
+    let meta_bytes = serde_json::to_vec(&meta).unwrap();
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(payload).unwrap();
+    let compressed = encoder.finish().unwrap();
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"HEXP");
+    bytes.extend_from_slice(&3u32.to_le_bytes());
+    bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&(meta_bytes.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&meta_bytes);
+    bytes.extend_from_slice(&compressed);
+    bytes
+}
+
+/// As `generate_synthetic_hexport`, with the given JSON metadata header (subject and trial are filled in).
+pub fn generate_synthetic_hexport_with_meta(subject: &str, trial: &str, meta: serde_json::Value) -> Vec<u8> {
     let mut payload = Vec::new();
 
     let row_count = 1u32;
@@ -57,9 +85,6 @@ pub fn generate_synthetic_hexport_with_quality(subject: &str, trial: &str, quali
     columns.push(("flag_low_sam3_wilor_coverage", 2));
     columns.push(("flag_chirality_mismatch", 2));
     columns.push(("flag_persistent_adult_interference", 2));
-    if quality.is_some() {
-        columns.push(("quality_trial_score", 0));
-    }
 
     let col_count = columns.len() as u32;
 
@@ -79,11 +104,7 @@ pub fn generate_synthetic_hexport_with_quality(subject: &str, trial: &str, quali
         match *dtype {
             0 => {
                 // Float32
-                let val = if *name == "quality_trial_score" {
-                    quality.unwrap_or(0.0)
-                } else {
-                    0.0
-                };
+                let val = 0.0f32;
                 payload.extend_from_slice(&val.to_le_bytes());
             }
             1 => {
@@ -123,21 +144,7 @@ pub fn generate_synthetic_hexport_with_quality(subject: &str, trial: &str, quali
         }
     }
 
-    let payload_size = payload.len() as u32;
-
-    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(&payload).unwrap();
-    let compressed = encoder.finish().unwrap();
-    let compressed_size = compressed.len() as u32;
-
-    let mut file_bytes = Vec::new();
-    file_bytes.extend_from_slice(b"HEXP");
-    file_bytes.extend_from_slice(&2u32.to_le_bytes()); // Version 2
-    file_bytes.extend_from_slice(&payload_size.to_le_bytes());
-    file_bytes.extend_from_slice(&compressed_size.to_le_bytes());
-    file_bytes.extend_from_slice(&compressed);
-
-    file_bytes
+    wrap_hexport(&payload, subject, trial, meta)
 }
 
 /// Helper that creates a temporary synthetic `.hexport` file on disk for integration testing.
@@ -326,14 +333,5 @@ pub fn generate_measure_hexport(rows: &[MeasureRow], with_measures: bool) -> Vec
         }
     }
 
-    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(&payload).unwrap();
-    let compressed = encoder.finish().unwrap();
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(b"HEXP");
-    bytes.extend_from_slice(&2u32.to_le_bytes());
-    bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-    bytes.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
-    bytes.extend_from_slice(&compressed);
-    bytes
+    wrap_hexport(&payload, "S", "T", serde_json::json!({ "video_hash": "0".repeat(64) }))
 }

@@ -5,11 +5,12 @@ use std::path::Path;
 
 use flate2::read::ZlibDecoder;
 use glam::Vec3;
+use serde::Deserialize;
 use thiserror::Error;
 
 const MAGIC: [u8; 4] = *b"HEXP";
-const VERSION: u32 = 2;
-const HEADER_SIZE: usize = 16;
+const VERSION: u32 = 3;
+const HEADER_SIZE: usize = 20;
 const STRING_FIELD_WIDTH: usize = 32;
 
 #[derive(Debug, Error)]
@@ -193,6 +194,14 @@ pub fn load_hand_export<P: AsRef<Path>>(export_path: P) -> Result<Vec<HandExport
 
 /// Parses the bytes of a `.hexport` file; `source` names where they came from, for error messages.
 pub fn parse_hand_export(raw: &[u8], source: &str) -> Result<Vec<HandExportRow>, HandExportError> {
+    parse_hand_export_with_meta(raw, source).map(|(_, rows)| rows)
+}
+
+/// As [`parse_hand_export`], also returning the file's JSON metadata header.
+pub fn parse_hand_export_with_meta(
+    raw: &[u8],
+    source: &str,
+) -> Result<(HexportMetadata, Vec<HandExportRow>), HandExportError> {
     let path_str = source.to_string();
     if raw.len() < HEADER_SIZE || raw[0..4] != MAGIC {
         return Err(HandExportError::InvalidMagic(path_str));
@@ -210,11 +219,14 @@ pub fn parse_hand_export(raw: &[u8], source: &str) -> Result<Vec<HandExportRow>,
         });
     }
 
-    if raw.len() < HEADER_SIZE + compressed_size {
+    let meta_size = u32::from_le_bytes(raw[16..20].try_into().unwrap()) as usize;
+    if raw.len() < HEADER_SIZE + meta_size + compressed_size {
         return Err(HandExportError::Truncated(path_str));
     }
+    let meta = parse_meta_json(&raw[HEADER_SIZE..HEADER_SIZE + meta_size])
+        .ok_or_else(|| HandExportError::Malformed(format!("Invalid metadata header: {path_str}")))?;
 
-    let compressed_bytes = &raw[HEADER_SIZE..HEADER_SIZE + compressed_size];
+    let compressed_bytes = &raw[HEADER_SIZE + meta_size..HEADER_SIZE + meta_size + compressed_size];
     let mut decoder = ZlibDecoder::new(compressed_bytes);
     let mut payload = Vec::with_capacity(payload_size);
     decoder
@@ -427,117 +439,50 @@ pub fn parse_hand_export(raw: &[u8], source: &str) -> Result<Vec<HandExportRow>,
         });
     }
 
-    Ok(rows)
+    Ok((meta, rows))
 }
 
-/// What the explorer shows for a trial without parsing its rows.
-#[derive(Debug, Clone, PartialEq)]
+/// The JSON header of a `.hexport` file: what the explorer shows and what identifies the source video.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct HexportMetadata {
+    #[serde(default)]
     pub subject: String,
+    #[serde(default)]
     pub trial: String,
-    /// `quality_trial_score` (0-1); None for exports without the column or trials with no infant hand.
+    /// `quality_trial_score` (0-1); None for trials with no infant hand.
+    #[serde(default, rename = "quality_trial_score", deserialize_with = "finite_score")]
     pub quality_score: Option<f32>,
+    /// SHA-256 of the source video; identifies it wherever it lives.
+    #[serde(default)]
+    pub video_hash: String,
+    #[serde(default)]
+    pub fps_key: Option<String>,
+    /// Cheap pre-filters when searching for the video; None when the pipeline did not know them.
+    #[serde(default)]
+    pub video_basename: Option<String>,
+    #[serde(default)]
+    pub video_size_bytes: Option<u64>,
 }
 
-/// Reads the subject, trial and trial quality score from a `.hexport` file's first row, without parsing the rest.
+fn finite_score<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option<f32>, D::Error> {
+    Ok(Option::<f32>::deserialize(de)?.filter(|score| score.is_finite()))
+}
+
+fn parse_meta_json(bytes: &[u8]) -> Option<HexportMetadata> {
+    serde_json::from_slice(bytes).ok()
+}
+
+/// Reads the JSON metadata header of a `.hexport` file without touching the compressed rows.
 pub fn read_hexport_metadata<P: AsRef<Path>>(path: P) -> Option<HexportMetadata> {
     let mut file = File::open(path).ok()?;
     let mut header = [0u8; HEADER_SIZE];
     file.read_exact(&mut header).ok()?;
-
-    if header[0..4] != MAGIC {
+    if header[0..4] != MAGIC || u32::from_le_bytes(header[4..8].try_into().unwrap()) != VERSION {
         return None;
     }
-    let version = u32::from_le_bytes(header[4..8].try_into().unwrap());
-    if version != VERSION {
-        return None;
-    }
-    let payload_size = u32::from_le_bytes(header[8..12].try_into().unwrap()) as usize;
-    let compressed_size = u32::from_le_bytes(header[12..16].try_into().unwrap()) as usize;
-
-    if payload_size == 0 || compressed_size == 0 {
-        return None;
-    }
-
-    let mut compressed = vec![0u8; compressed_size];
-    file.read_exact(&mut compressed).ok()?;
-
-    let mut decoder = ZlibDecoder::new(&compressed[..]);
-    let mut payload = Vec::with_capacity(payload_size);
-    decoder.read_to_end(&mut payload).ok()?;
-
-    if payload.len() != payload_size || payload.len() < 8 {
-        return None;
-    }
-
-    let mut offset = 0;
-    let row_count = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
-    offset += 4;
-    let column_count = u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap()) as usize;
-    offset += 4;
-
-    if row_count == 0 {
-        return None;
-    }
-
-    struct ColDesc {
-        name: String,
-        dtype: DType,
-    }
-
-    let mut ordered = Vec::with_capacity(column_count);
-    for _ in 0..column_count {
-        if offset + 2 > payload.len() {
-            return None;
-        }
-        let name_len = payload[offset] as usize;
-        offset += 1;
-        let dtype_byte = payload[offset];
-        offset += 1;
-        let dtype = DType::from_u8(dtype_byte)?;
-        if offset + name_len > payload.len() {
-            return None;
-        }
-        let name = String::from_utf8_lossy(&payload[offset..offset + name_len]).to_string();
-        offset += name_len;
-        ordered.push(ColDesc { name, dtype });
-    }
-
-    let mut columns = HashMap::with_capacity(ordered.len());
-    for col in ordered {
-        columns.insert(
-            col.name,
-            ColumnInfo {
-                dtype: col.dtype,
-                offset,
-            },
-        );
-        offset += col.dtype.item_size() * row_count;
-    }
-
-    let subj_col = columns.get("subject")?;
-    let trial_col = columns.get("trial")?;
-
-    let get_first_string = |col: &ColumnInfo| -> Option<String> {
-        if col.offset + STRING_FIELD_WIDTH > payload.len() {
-            return None;
-        }
-        let slice = &payload[col.offset..col.offset + STRING_FIELD_WIDTH];
-        let end = slice.iter().position(|&b| b == 0).unwrap_or(STRING_FIELD_WIDTH);
-        let s = String::from_utf8_lossy(&slice[..end]).to_string();
-        if s.is_empty() { None } else { Some(s) }
-    };
-
-    let subject = get_first_string(subj_col)?;
-    let trial = get_first_string(trial_col)?;
-    let quality_score = columns
-        .get("quality_trial_score")
-        .filter(|col| col.dtype == DType::Float32 && col.offset + 4 <= payload.len())
-        .map(|col| f32::from_le_bytes(payload[col.offset..col.offset + 4].try_into().unwrap()))
-        .filter(|score| score.is_finite());
-    Some(HexportMetadata {
-        subject,
-        trial,
-        quality_score,
-    })
+    let meta_size = u32::from_le_bytes(header[16..20].try_into().unwrap()) as usize;
+    let mut meta = vec![0u8; meta_size];
+    file.read_exact(&mut meta).ok()?;
+    let meta = parse_meta_json(&meta)?;
+    (!meta.subject.is_empty() && !meta.trial.is_empty()).then_some(meta)
 }
