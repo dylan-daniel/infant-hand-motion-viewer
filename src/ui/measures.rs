@@ -1,4 +1,4 @@
-use dear_imgui_rs::{Condition, Id, Ui, WindowFlags};
+use dear_imgui_rs::{Condition, Id, MouseButton, Ui, WindowFlags};
 
 use crate::data::{
     GraspMark, LEFT_HAND_COLOR, MEASURE_COUNT, MeasureSeries, MeshSequence, RIGHT_HAND_COLOR, track_color,
@@ -23,12 +23,84 @@ const PLOT_MARGIN: f32 = 4.0;
 /// Space above and below a legend swatch, the same as the Flags window's.
 const SWATCH_PADDING: f32 = 4.0;
 
+/// Fewest frames the zoom narrows to.
+const MIN_VISIBLE_FRAMES: f32 = 10.0;
+/// Each wheel notch scales the visible span by this much.
+const ZOOM_STEP: f32 = 0.8;
+/// Fraction of the visible span a pan wheel notch moves.
+const PAN_STEP: f32 = 0.1;
+
+/// The span of frames the plots show, shared by all of them. Fractional so zooming is smooth.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TimeView {
+    pub start: f32,
+    pub end: f32,
+}
+
+impl TimeView {
+    /// Every frame of a sequence of `frame_count`.
+    pub fn full(frame_count: usize) -> Self {
+        Self {
+            start: 0.0,
+            end: frame_count.saturating_sub(1) as f32,
+        }
+    }
+
+    pub fn span(&self) -> f32 {
+        self.end - self.start
+    }
+
+    pub fn is_full(&self, frame_count: usize) -> bool {
+        *self == Self::full(frame_count)
+    }
+
+    /// Scales the span by `factor` (below 1 zooms in) keeping `anchor` where it is on screen.
+    pub fn zoom(&mut self, factor: f32, anchor: f32, frame_count: usize) {
+        let full = Self::full(frame_count);
+        let min_span = MIN_VISIBLE_FRAMES.min(full.span());
+        let span = (self.span() * factor).clamp(min_span, full.span());
+        let t = if self.span() > 0.0 {
+            ((anchor - self.start) / self.span()).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        self.start = anchor - t * span;
+        self.end = self.start + span;
+        self.shift(0.0, frame_count);
+    }
+
+    /// Moves the view by `delta` frames, stopping at the ends of the sequence.
+    pub fn shift(&mut self, delta: f32, frame_count: usize) {
+        let full = Self::full(frame_count);
+        let span = self.span();
+        self.start = (self.start + delta).clamp(0.0, (full.end - span).max(0.0));
+        self.end = self.start + span;
+    }
+
+    /// The x of `frame` across `[x0, x1]`.
+    pub fn x_of(&self, frame: f32, x0: f32, x1: f32) -> f32 {
+        if self.span() <= 0.0 {
+            return x0;
+        }
+        x0 + (x1 - x0) * (frame - self.start) / self.span()
+    }
+
+    /// The fractional frame under `x`.
+    pub fn frame_at(&self, x: f32, x0: f32, x1: f32) -> f32 {
+        if x1 <= x0 {
+            return self.start;
+        }
+        self.start + (x - x0) / (x1 - x0) * self.span()
+    }
+}
+
 /// The measure series for the open sequence, rebuilt only when the sequence, the track mode or the raw/smoothed choice changes.
 #[derive(Default)]
 pub struct MeasuresView {
     key: Option<(String, bool, bool, (bool, bool))>,
     series: Vec<Vec<MeasureSeries>>,
     has_data: bool,
+    time_view: Option<TimeView>,
 }
 
 impl MeasuresView {
@@ -36,6 +108,9 @@ impl MeasuresView {
         let key = (sequence.path().to_string(), per_track, sequence.is_smoothed(), hidden);
         if self.key.as_ref() == Some(&key) {
             return;
+        }
+        if self.key.as_ref().map(|k| &k.0) != Some(&key.0) {
+            self.time_view = None;
         }
         self.has_data = sequence.has_measure_data();
         self.series = if self.has_data {
@@ -146,11 +221,27 @@ pub fn draw_measures_window(
                 return;
             }
             let frame_count = sequence.frame_count();
+            let MeasuresView { series, time_view, .. } = view;
+            let time = time_view.get_or_insert_with(|| TimeView::full(frame_count));
             ui.child_window("MeasureScroll").size([0.0, 0.0]).build(ui, || {
-                draw_legend(ui, &view.series[0]);
-                for (m, series) in view.series.iter().enumerate() {
+                draw_legend(ui, &series[0]);
+                if !time.is_full(frame_count) {
+                    ui.text_disabled(format!(
+                        "Frames {:.0}-{:.0} (double-click a plot to reset)",
+                        time.start, time.end
+                    ));
+                }
+                for (m, list) in series.iter().enumerate() {
                     let height = if m == 0 { APERTURE_PLOT_HEIGHT } else { PLOT_HEIGHT };
-                    if let Some(frame) = draw_plot(ui, m, series, frame_count, current_frame, grasp_marks, height) {
+                    let plot = Plot {
+                        measure: m,
+                        series: list,
+                        frame_count,
+                        current_frame,
+                        grasp_marks,
+                        height,
+                    };
+                    if let Some(frame) = draw_plot(ui, &plot, time) {
                         scrubbed = Some(frame);
                     }
                 }
@@ -188,15 +279,25 @@ fn draw_legend(ui: &Ui, series: &[MeasureSeries]) {
     }
 }
 
-fn draw_plot(
-    ui: &Ui,
+/// What one plot draws.
+struct Plot<'a> {
     measure: usize,
-    series: &[MeasureSeries],
+    series: &'a [MeasureSeries],
     frame_count: usize,
     current_frame: usize,
-    grasp_marks: &[GraspMark],
+    grasp_marks: &'a [GraspMark],
     height: f32,
-) -> Option<usize> {
+}
+
+fn draw_plot(ui: &Ui, plot: &Plot, time: &mut TimeView) -> Option<usize> {
+    let Plot {
+        measure,
+        series,
+        frame_count,
+        current_frame,
+        grasp_marks,
+        height,
+    } = *plot;
     let _id = ui.push_id(measure as i32);
     ui.text(MEASURE_TITLES[measure]);
     let width = ui.content_region_avail()[0].max(50.0);
@@ -206,6 +307,27 @@ fn draw_plot(
     let active = ui.is_item_active();
     let hovered = ui.is_item_hovered();
 
+    // Frames map inside the box so a line on the first or last frame is not cut by its border or clip
+    let (x_min, x_max) = (min[0] + PLOT_MARGIN, max[0] - PLOT_MARGIN);
+    let mouse_x = ui.io().mouse_pos()[0];
+    if hovered {
+        let io = ui.io();
+        let (wheel, wheel_h) = (io.mouse_wheel(), io.mouse_wheel_h());
+        if io.key_ctrl() && io.key_shift() && (wheel != 0.0 || wheel_h != 0.0) {
+            time.shift((wheel + wheel_h) * -time.span() * PAN_STEP, frame_count);
+        } else if io.key_ctrl() && wheel != 0.0 {
+            let anchor = time.frame_at(mouse_x, x_min, x_max);
+            time.zoom(ZOOM_STEP.powf(wheel), anchor, frame_count);
+        }
+        if ui.is_mouse_double_clicked(MouseButton::Left) {
+            *time = TimeView::full(frame_count);
+        }
+    }
+    let time = *time;
+    let to_x = |frame: usize| time.x_of(frame as f32, x_min, x_max);
+    let to_frame =
+        |x: f32| (time.frame_at(x, x_min, x_max).round().max(0.0) as usize).min(frame_count.saturating_sub(1));
+
     let draw_list = ui.get_window_draw_list();
     draw_list
         .add_rect(min, max, super::rgba(24, 24, 28, 255))
@@ -214,8 +336,6 @@ fn draw_plot(
     draw_list.add_rect(min, max, super::rgba(80, 80, 90, 255)).build();
     let _clip = draw_list.push_clip_rect(min, max, true);
 
-    // Frames map inside the box so a line on the first or last frame is not cut by its border or clip
-    let (x_min, x_max) = (min[0] + PLOT_MARGIN, max[0] - PLOT_MARGIN);
     let range = value_range(series);
     match range {
         Some((lo, hi)) => {
@@ -228,16 +348,17 @@ fn draw_plot(
             for s in series {
                 let color = series_color(s);
                 for run in finite_runs(&s.values) {
-                    let point = |&(f, v): &(usize, f32)| [frame_to_x(f, frame_count, x_min, x_max), y_of(v)];
+                    let point = |&(f, v): &(usize, f32)| [to_x(f), y_of(v)];
                     if let [only] = run.as_slice() {
                         let [x, y] = point(only);
                         draw_list.add_circle([x, y], 2.0, color).filled(true).build();
                     }
                     for pair in run.windows(2) {
-                        draw_list
-                            .add_line(point(&pair[0]), point(&pair[1]), color)
-                            .thickness(2.0)
-                            .build();
+                        let (a, b) = (point(&pair[0]), point(&pair[1]));
+                        if (a[0] < min[0] && b[0] < min[0]) || (a[0] > max[0] && b[0] > max[0]) {
+                            continue;
+                        }
+                        draw_list.add_line(a, b, color).thickness(2.0).build();
                     }
                 }
             }
@@ -260,20 +381,19 @@ fn draw_plot(
     }
 
     for mark in grasp_marks {
-        let x = frame_to_x(mark.frame, frame_count, x_min, x_max);
+        let x = to_x(mark.frame);
         draw_vline(&draw_list, x, min[1], max[1], mark);
     }
 
-    let cursor_x = frame_to_x(current_frame, frame_count, x_min, x_max);
+    let cursor_x = to_x(current_frame);
     draw_list
         .add_line([cursor_x, min[1]], [cursor_x, max[1]], super::rgba(255, 220, 80, 255))
         .thickness(1.5)
         .build();
 
-    let mouse_x = ui.io().mouse_pos()[0];
     if hovered {
-        let frame = x_to_frame(mouse_x, frame_count, x_min, x_max);
-        let x = frame_to_x(frame, frame_count, x_min, x_max);
+        let frame = to_frame(mouse_x);
+        let x = to_x(frame);
         draw_list
             .add_line([x, min[1]], [x, max[1]], super::rgba(255, 255, 255, 70))
             .build();
@@ -292,5 +412,5 @@ fn draw_plot(
     }
 
     ui.spacing();
-    active.then(|| x_to_frame(mouse_x, frame_count, x_min, x_max))
+    active.then(|| to_frame(mouse_x))
 }
