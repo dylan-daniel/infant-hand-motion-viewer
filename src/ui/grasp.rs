@@ -165,7 +165,13 @@ pub enum GraspPaneState<'a> {
 }
 
 /// Draw the dockable "Grasp" window: hands used, object, contact, per-event time and certainty, per-hand grip detail.
-pub fn draw_grasp_window(ui: &Ui, title: &str, state: GraspPaneState<'_>, dock_id: Option<Id>) {
+pub fn draw_grasp_window(
+    ui: &Ui,
+    title: &str,
+    state: GraspPaneState<'_>,
+    hide_unused_hands: &mut bool,
+    dock_id: Option<Id>,
+) {
     if let Some(did) = dock_id {
         ui.set_next_window_dock_id_with_cond(did, Condition::FirstUseEver);
     }
@@ -205,7 +211,11 @@ pub fn draw_grasp_window(ui: &Ui, title: &str, state: GraspPaneState<'_>, dock_i
                 );
             }
             ui.separator();
-            draw_hand(ui, "Left", &row.left);
-            draw_hand(ui, "Right", &row.right);
+            ui.checkbox("Hide unused hands", hide_unused_hands);
+            for (label, hand) in [("Left", &row.left), ("Right", &row.right)] {
+                if !*hide_unused_hands || hand.used == Some(true) {
+                    draw_hand(ui, label, hand);
+                }
+            }
         });
 }

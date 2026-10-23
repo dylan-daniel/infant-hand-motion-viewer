@@ -1330,7 +1330,13 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
                 trial: &seq.meta().trial,
             },
         };
-        draw_grasp_window(ui, "Grasp###Grasp", grasp_state, None);
+        draw_grasp_window(
+            ui,
+            "Grasp###Grasp",
+            grasp_state,
+            &mut state.settings.hide_unused_hands,
+            None,
+        );
 
         let explorer_result = state.explorer.draw_explorer_window(ui, &state.icons, None);
 
