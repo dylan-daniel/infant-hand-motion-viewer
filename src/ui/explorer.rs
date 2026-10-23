@@ -688,7 +688,15 @@ impl FileExplorer {
         let width = ui.calc_text_size(&text)[0];
         let item_min = ui.item_rect_min();
         let item_max = ui.item_rect_max();
-        let x = (item_max[0] - width - ui.clone_style().item_spacing()[0]).max(name_right);
+        let style = ui.clone_style();
+        let scrollbar = if ui.scroll_max_y() > 0.0 {
+            style.scrollbar_size()
+        } else {
+            0.0
+        };
+        let visible_right = ui.window_pos()[0] + ui.window_width() - scrollbar;
+        let right = item_max[0].min(visible_right);
+        let x = (right - width - style.item_spacing()[0]).max(name_right);
         let y = (item_min[1] + item_max[1]) * 0.5 - ui.current_font_size() * 0.5;
         ui.get_window_draw_list()
             .add_text([x, y], crate::ui::rgba(255, 220, 80, 255), &text);
