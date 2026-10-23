@@ -68,6 +68,9 @@ pub fn draw_menu_bar(ui: &Ui, mut state: MenuState) -> MenuResult {
             if ui.menu_item("Grasp Events CSVs...") {
                 result.open_grasp_events_requested = true;
             }
+            if ui.menu_item("Video Folders...") {
+                result.open_video_roots_requested = true;
+            }
         });
 
         ui.menu("Remote", || {
@@ -108,9 +111,6 @@ pub fn draw_menu_bar(ui: &Ui, mut state: MenuState) -> MenuResult {
                 crate::ui::padded_tooltip(ui, || {
                     ui.text("Draw the hands on top of the video frame.");
                 });
-            }
-            if ui.menu_item("Video Folders...") {
-                result.open_video_roots_requested = true;
             }
             ui.menu("Cache", || {
                 ui.checkbox("Cache Remote Files", &mut state.cache_enabled);
