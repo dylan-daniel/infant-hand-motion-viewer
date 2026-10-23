@@ -748,21 +748,16 @@ impl FileExplorer {
                 .span_full_width(true)
                 .push();
             let right = Self::draw_node_label(ui, draw.icons.file_hexport, &node.name, node_left);
-            let (mut score_left, mut score_right) = (node.quality_score_left, node.quality_score_right);
-            if let Some((hide_left, hide_right)) = draw
+            let (hide_left, hide_right) = draw
                 .hide_unused
                 .and_then(|grasp| grasp.row(&node.subject, &node.trial))
-                .map(|row| row.unused_sides())
-            {
-                if hide_left {
-                    score_left = None;
-                }
-                if hide_right {
-                    score_right = None;
-                }
-            }
-            let right = if score_left.is_some() || score_right.is_some() {
-                Self::draw_quality_scores(ui, score_left, score_right, right)
+                .map_or((false, false), |row| row.unused_sides());
+            let left = (!hide_left).then_some(node.quality_score_left);
+            let right_score = (!hide_right).then_some(node.quality_score_right);
+            let has_score = node.quality_score_left.is_some() || node.quality_score_right.is_some();
+            let any_score = has_score && (left.is_some() || right_score.is_some());
+            let right = if any_score {
+                Self::draw_quality_scores(ui, left, right_score, right)
             } else {
                 right
             };
@@ -812,17 +807,17 @@ impl FileExplorer {
     }
 
     /// Paint the left (red) and right (blue) hand scores against the row's right edge, never over the name that ends
-    /// at `name_right`. Returns the narrowest row width that fits both, not the painted edge, so the column can shrink
+    /// at `name_right`. A side that is `None` is not drawn at all; `Some(None)` is drawn as a dash. Returns the narrowest row width that fits both, not the painted edge, so the column can shrink
     /// again.
-    fn draw_quality_scores(ui: &Ui, left: Option<f32>, right: Option<f32>, name_right: f32) -> f32 {
-        let texts = [
-            (format!("L {}", format_quality_score(left)), LEFT_HAND_COLOR),
-            (format!("R {}", format_quality_score(right)), RIGHT_HAND_COLOR),
-        ];
+    fn draw_quality_scores(ui: &Ui, left: Option<Option<f32>>, right: Option<Option<f32>>, name_right: f32) -> f32 {
+        let texts: Vec<_> = [("L", left, LEFT_HAND_COLOR), ("R", right, RIGHT_HAND_COLOR)]
+            .into_iter()
+            .filter_map(|(side, score, color)| Some((format!("{side} {}", format_quality_score(score?)), color)))
+            .collect();
         let style = ui.clone_style();
         let gap = style.item_spacing()[0];
         let widths: Vec<f32> = texts.iter().map(|(text, _)| ui.calc_text_size(text)[0]).collect();
-        let total = widths.iter().sum::<f32>() + gap;
+        let total = widths.iter().sum::<f32>() + gap * (texts.len() as f32 - 1.0);
         let item_min = ui.item_rect_min();
         let item_max = ui.item_rect_max();
         let scrollbar = if ui.scroll_max_y() > 0.0 {
