@@ -162,20 +162,31 @@ fn test_transport_state_and_flag_constants() {
 fn test_playback_speed_button_cycles_through_the_presets() {
     use infant_hand_motion_viewer::ui::{PLAYBACK_SPEEDS, next_playback_speed};
 
-    assert_eq!(PLAYBACK_SPEEDS, [1.0, 2.0, 4.0]);
+    assert_eq!(PLAYBACK_SPEEDS, [0.25, 0.5, 1.0, 2.0, 4.0]);
+    assert_eq!(next_playback_speed(0.25), 0.5);
+    assert_eq!(next_playback_speed(0.5), 1.0);
     assert_eq!(next_playback_speed(1.0), 2.0);
     assert_eq!(next_playback_speed(2.0), 4.0);
-    assert_eq!(next_playback_speed(4.0), 1.0);
+    assert_eq!(next_playback_speed(4.0), 0.25);
+}
+
+#[test]
+fn test_playback_speed_labels_keep_their_fractions() {
+    use infant_hand_motion_viewer::ui::format_speed;
+
+    let labels: Vec<_> = [0.25, 0.5, 1.0, 2.0, 4.0].map(format_speed).into();
+    assert_eq!(labels, ["0.25x", "0.5x", "1.0x", "2.0x", "4.0x"]);
 }
 
 #[test]
 fn test_playback_speed_outside_the_presets_moves_to_the_next_faster_one() {
     use infant_hand_motion_viewer::ui::next_playback_speed;
 
-    assert_eq!(next_playback_speed(0.5), 1.0);
+    assert_eq!(next_playback_speed(0.1), 0.25);
+    assert_eq!(next_playback_speed(0.75), 1.0);
     assert_eq!(next_playback_speed(1.5), 2.0);
     assert_eq!(next_playback_speed(3.0), 4.0);
-    assert_eq!(next_playback_speed(8.0), 1.0);
+    assert_eq!(next_playback_speed(8.0), 0.25);
 }
 
 /// Dear ImGui allows one active context at a time, so tests that build one must not overlap.

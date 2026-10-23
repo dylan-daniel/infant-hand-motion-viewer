@@ -5,7 +5,13 @@ use crate::ui::PLAYBACK_BAR_HEIGHT;
 use crate::ui::icons::UiIcons;
 
 /// Playback speeds the speed button cycles through.
-pub const PLAYBACK_SPEEDS: [f32; 3] = [1.0, 2.0, 4.0];
+pub const PLAYBACK_SPEEDS: [f32; 5] = [0.25, 0.5, 1.0, 2.0, 4.0];
+
+/// A speed as shown on the button: `0.25x`, `0.5x`, `1.0x`.
+pub fn format_speed(speed: f32) -> String {
+    let text = format!("{speed:.2}");
+    format!("{}x", text.strip_suffix('0').unwrap_or(&text))
+}
 
 /// The speed after `current` in [`PLAYBACK_SPEEDS`]: the next faster one, wrapping back to the slowest.
 /// A speed that isn't in the list (say from a hand-edited config) moves up to the next faster preset.
@@ -453,10 +459,10 @@ pub fn draw_transport_bar(
     ui.same_line();
     let spacing = ui.clone_style().item_spacing()[0];
     // Sized for the widest label so the button, and with it the slider, keeps its width as the speed changes
-    let speed_label = format!("{:.1}x", state.speed);
+    let speed_label = format_speed(state.speed);
     let speed_text_width = PLAYBACK_SPEEDS
         .iter()
-        .map(|&speed| ui.calc_text_size(format!("{speed:.1}x"))[0])
+        .map(|&speed| ui.calc_text_size(format_speed(speed))[0])
         .fold(ui.calc_text_size(&speed_label)[0], f32::max);
     let speed_button_width = speed_text_width + ui.clone_style().frame_padding()[0] * 2.0;
     let slider_width = (width - 8.0 - button_width - spacing - speed_button_width - spacing - 8.0).max(1.0);
