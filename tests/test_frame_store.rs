@@ -60,3 +60,11 @@ fn cancelling_is_sticky() {
     store.cancel();
     assert!(store.is_cancelled());
 }
+
+#[test]
+fn the_frame_rate_is_unknown_until_set() {
+    let store = FrameStore::new();
+    assert_eq!(store.fps(), None);
+    store.set_fps(Some(25.0));
+    assert_eq!(store.fps(), Some(25.0));
+}

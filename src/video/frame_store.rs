@@ -63,6 +63,7 @@ struct Inner {
     width: u32,
     height: u32,
     expected: usize,
+    fps: Option<f64>,
     frames: Vec<Arc<Vec<u8>>>,
 }
 
@@ -80,6 +81,7 @@ impl FrameStore {
                 width: 0,
                 height: 0,
                 expected: 0,
+                fps: None,
                 frames: Vec::new(),
             }),
             cancelled: AtomicBool::new(false),
@@ -103,6 +105,15 @@ impl FrameStore {
         inner.frames.clear();
         inner.frames.reserve(expected);
         inner.status = LoadStatus::Decoding;
+    }
+
+    pub fn set_fps(&self, fps: Option<f64>) {
+        self.inner.lock().unwrap().fps = fps;
+    }
+
+    /// The clip's frame rate once the decoder has probed it.
+    pub fn fps(&self) -> Option<f64> {
+        self.inner.lock().unwrap().fps
     }
 
     pub fn push(&self, rgb: Vec<u8>) {

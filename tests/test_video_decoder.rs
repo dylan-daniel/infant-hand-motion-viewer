@@ -60,7 +60,8 @@ fn probe_output_gives_size_and_frame_count() {
         VideoInfo {
             width: 1920,
             height: 1080,
-            frames: 228
+            frames: 228,
+            fps: Some(30000.0 / 1001.0)
         }
     );
 }
@@ -71,6 +72,8 @@ fn the_frame_count_falls_back_to_duration_times_rate() {
     assert_eq!(parse_probe(json).unwrap().frames, 60);
     let unknown = r#"{"streams":[{"width":640,"height":480}]}"#;
     assert_eq!(parse_probe(unknown).unwrap().frames, 0);
+    assert_eq!(parse_probe(unknown).unwrap().fps, None);
+    assert_eq!(parse_probe(json).unwrap().fps, Some(30.0));
 }
 
 #[test]

@@ -68,6 +68,8 @@ pub struct VideoInfo {
     pub height: u32,
     /// Best guess of the frame count; zero when the file does not say.
     pub frames: usize,
+    /// Average frame rate; `None` when the file does not say.
+    pub fps: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -111,6 +113,11 @@ pub fn parse_probe(json: &str) -> Result<VideoInfo, String> {
         width: stream.width,
         height: stream.height,
         frames: counted.or_else(estimated).unwrap_or(0),
+        fps: stream
+            .avg_frame_rate
+            .as_deref()
+            .and_then(parse_rate)
+            .filter(|rate| *rate > 0.0),
     })
 }
 
@@ -171,6 +178,7 @@ pub fn decode_into(path: &Path, store: &FrameStore) -> Result<(), String> {
         text
     });
 
+    store.set_fps(info.fps);
     store.begin(width, height, info.frames);
     let frame_len = width as usize * height as usize * 3;
     loop {
