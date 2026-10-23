@@ -13,6 +13,7 @@ use dear_imgui_rs::{
 };
 
 use crate::data::hand_export::{HexportMetadata, read_hexport_metadata};
+use crate::data::{LEFT_HAND_COLOR, RIGHT_HAND_COLOR};
 use crate::remote::{ExplorerNode, RemoteClient};
 use crate::ui::icons::UiIcons;
 use crate::ui::trial_filter::TrialFilter;
@@ -74,9 +75,9 @@ pub enum SourceMode {
     Remote,
 }
 
-/// Trial quality score as shown beside a trial: two decimals, clamped to 0-1.
-pub fn format_quality_score(score: f32) -> String {
-    format!("{:.2}", score.clamp(0.0, 1.0))
+/// A trial quality score as shown beside a trial: two decimals clamped to 0-1, or a dash when the hand is not scored.
+pub fn format_quality_score(score: Option<f32>) -> String {
+    score.map_or_else(|| "-".to_string(), |score| format!("{:.2}", score.clamp(0.0, 1.0)))
 }
 
 /// What the user did in the Explorer pane this frame.
@@ -314,7 +315,8 @@ impl FileExplorer {
             is_file: false,
             children: Vec::new(),
             default_open: true,
-            quality_score: None,
+            quality_score_left: None,
+            quality_score_right: None,
         };
 
         let mut subdirs = Vec::new();
@@ -363,7 +365,8 @@ impl FileExplorer {
             path: String,
             display_name: String,
             params_tag: String,
-            quality_score: Option<f32>,
+            quality_score_left: Option<f32>,
+            quality_score_right: Option<f32>,
         }
 
         let mut subject_groups: BTreeMap<String, Vec<FileEntry>> = BTreeMap::new();
@@ -381,7 +384,8 @@ impl FileExplorer {
             if let Some(HexportMetadata {
                 subject,
                 trial,
-                quality_score,
+                quality_score_left,
+                quality_score_right,
                 ..
             }) = read_hexport_metadata(path)
             {
@@ -394,7 +398,8 @@ impl FileExplorer {
                     path: path.to_string_lossy().into_owned(),
                     display_name,
                     params_tag: params_tag.to_string(),
-                    quality_score,
+                    quality_score_left,
+                    quality_score_right,
                 });
             } else {
                 unclassified.push(ExplorerNode {
@@ -403,7 +408,8 @@ impl FileExplorer {
                     is_file: true,
                     children: Vec::new(),
                     default_open: false,
-                    quality_score: None,
+                    quality_score_left: None,
+                    quality_score_right: None,
                 });
             }
         }
@@ -430,7 +436,8 @@ impl FileExplorer {
                     is_file: true,
                     children: Vec::new(),
                     default_open: false,
-                    quality_score: entry.quality_score,
+                    quality_score_left: entry.quality_score_left,
+                    quality_score_right: entry.quality_score_right,
                 });
             }
 
@@ -442,7 +449,8 @@ impl FileExplorer {
                 is_file: false,
                 children: subject_children,
                 default_open: false,
-                quality_score: None,
+                quality_score_left: None,
+                quality_score_right: None,
             });
         }
 
@@ -721,9 +729,10 @@ impl FileExplorer {
                 .span_full_width(true)
                 .push();
             let right = Self::draw_node_label(ui, draw.icons.file_hexport, &node.name, node_left);
-            let right = match node.quality_score {
-                Some(score) => Self::draw_quality_score(ui, score, right),
-                None => right,
+            let right = if node.quality_score_left.is_some() || node.quality_score_right.is_some() {
+                Self::draw_quality_scores(ui, node.quality_score_left, node.quality_score_right, right)
+            } else {
+                right
             };
             draw.content_right = draw.content_right.max(right);
 
@@ -770,26 +779,35 @@ impl FileExplorer {
         }
     }
 
-    /// Paint the score in yellow against the row's right edge, never over the name that ends at `name_right`.
-    /// Returns the narrowest row width that fits both, not the painted edge, so the column can shrink again.
-    fn draw_quality_score(ui: &Ui, score: f32, name_right: f32) -> f32 {
-        let text = format_quality_score(score);
-        let width = ui.calc_text_size(&text)[0];
+    /// Paint the left (red) and right (blue) hand scores against the row's right edge, never over the name that ends
+    /// at `name_right`. Returns the narrowest row width that fits both, not the painted edge, so the column can shrink
+    /// again.
+    fn draw_quality_scores(ui: &Ui, left: Option<f32>, right: Option<f32>, name_right: f32) -> f32 {
+        let texts = [
+            (format!("L {}", format_quality_score(left)), LEFT_HAND_COLOR),
+            (format!("R {}", format_quality_score(right)), RIGHT_HAND_COLOR),
+        ];
+        let style = ui.clone_style();
+        let gap = style.item_spacing()[0];
+        let widths: Vec<f32> = texts.iter().map(|(text, _)| ui.calc_text_size(text)[0]).collect();
+        let total = widths.iter().sum::<f32>() + gap;
         let item_min = ui.item_rect_min();
         let item_max = ui.item_rect_max();
-        let style = ui.clone_style();
         let scrollbar = if ui.scroll_max_y() > 0.0 {
             style.scrollbar_size()
         } else {
             0.0
         };
         let visible_right = ui.window_pos()[0] + ui.window_width() - scrollbar;
-        let right = item_max[0].min(visible_right);
-        let x = (right - width - style.item_spacing()[0]).max(name_right);
+        let edge = item_max[0].min(visible_right);
+        let mut x = (edge - total - gap).max(name_right);
         let y = (item_min[1] + item_max[1]) * 0.5 - ui.current_font_size() * 0.5;
-        ui.get_window_draw_list()
-            .add_text([x, y], crate::ui::rgba(255, 220, 80, 255), &text);
-        name_right + width + ui.clone_style().item_spacing()[0]
+        let draw_list = ui.get_window_draw_list();
+        for ((text, color), width) in texts.iter().zip(widths) {
+            draw_list.add_text([x, y], color.to_array(), text);
+            x += width + gap;
+        }
+        name_right + total + gap
     }
 
     /// Paint the icon and name over the row just submitted with an empty label, so the icon sits between the arrow and the text.

@@ -31,6 +31,8 @@ pub enum HandExportError {
     DecompressionFailed { path: String, reason: String },
     #[error("Hand export file is missing expected column '{column}': {path}")]
     MissingColumn { column: String, path: String },
+    #[error("Old export layout (single quality_trial_score), please re-export: {0}")]
+    LegacyLayout(String),
     #[error("Malformed schema or payload: {0}")]
     Malformed(String),
 }
@@ -229,6 +231,9 @@ pub fn parse_hand_export_with_meta(
     let meta_size = u32::from_le_bytes(raw[16..20].try_into().unwrap()) as usize;
     if raw.len() < HEADER_SIZE + meta_size + compressed_size {
         return Err(HandExportError::Truncated(path_str));
+    }
+    if is_legacy_layout(&raw[HEADER_SIZE..HEADER_SIZE + meta_size]) {
+        return Err(HandExportError::LegacyLayout(path_str));
     }
     let meta = parse_meta_json(&raw[HEADER_SIZE..HEADER_SIZE + meta_size])
         .ok_or_else(|| HandExportError::Malformed(format!("Invalid metadata header: {path_str}")))?;
@@ -456,9 +461,12 @@ pub struct HexportMetadata {
     pub subject: String,
     #[serde(default)]
     pub trial: String,
-    /// `quality_trial_score` (0-1); None for trials with no infant hand.
-    #[serde(default, rename = "quality_trial_score", deserialize_with = "finite_score")]
-    pub quality_score: Option<f32>,
+    /// Trial quality of the left infant hand (0-1); None when that hand appears in too few frames to score.
+    #[serde(default, rename = "quality_trial_score_left", deserialize_with = "finite_score")]
+    pub quality_score_left: Option<f32>,
+    /// As `quality_score_left`, for the right infant hand.
+    #[serde(default, rename = "quality_trial_score_right", deserialize_with = "finite_score")]
+    pub quality_score_right: Option<f32>,
     /// SHA-256 of the source video; identifies it wherever it lives.
     #[serde(default)]
     pub video_hash: String,
@@ -473,6 +481,11 @@ pub struct HexportMetadata {
 
 fn finite_score<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option<f32>, D::Error> {
     Ok(Option::<f32>::deserialize(de)?.filter(|score| score.is_finite()))
+}
+
+/// Exports from before the score was split per hand carry a single `quality_trial_score`; they are not supported.
+fn is_legacy_layout(bytes: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(bytes).is_ok_and(|meta| meta.get("quality_trial_score").is_some())
 }
 
 fn parse_meta_json(bytes: &[u8]) -> Option<HexportMetadata> {
@@ -490,6 +503,9 @@ pub fn read_hexport_metadata<P: AsRef<Path>>(path: P) -> Option<HexportMetadata>
     let meta_size = u32::from_le_bytes(header[16..20].try_into().unwrap()) as usize;
     let mut meta = vec![0u8; meta_size];
     file.read_exact(&mut meta).ok()?;
+    if is_legacy_layout(&meta) {
+        return None;
+    }
     let meta = parse_meta_json(&meta)?;
     (!meta.subject.is_empty() && !meta.trial.is_empty()).then_some(meta)
 }

@@ -33,7 +33,7 @@ fn test_synthetic_hexport_roundtrip() {
     let meta = meta.unwrap();
     assert_eq!(meta.subject, expected_subj);
     assert_eq!(meta.trial, expected_trial);
-    assert_eq!(meta.quality_score, None);
+    assert_eq!((meta.quality_score_left, meta.quality_score_right), (None, None));
 
     // 2. Verify full row payload loading
     let rows = load_hand_export(&export.path);
@@ -73,20 +73,45 @@ fn test_measure_columns_load_and_default_to_nan_when_absent() {
 }
 
 #[test]
-fn test_metadata_reads_trial_quality_score_and_ignores_missing_or_nan() {
-    use common::generate_synthetic_hexport_with_quality;
+fn test_metadata_reads_both_hand_scores_and_ignores_missing_or_nan() {
+    use common::generate_synthetic_hexport_with_scores;
 
-    let read = |quality: Option<f32>| {
-        let path = std::env::temp_dir().join(format!("quality_meta_{}_{quality:?}.hexport", std::process::id()));
-        std::fs::write(&path, generate_synthetic_hexport_with_quality("S", "T1", quality)).unwrap();
+    let read = |left: Option<f32>, right: Option<f32>| {
+        let path = std::env::temp_dir().join(format!(
+            "quality_meta_{}_{left:?}_{right:?}.hexport",
+            std::process::id()
+        ));
+        std::fs::write(&path, generate_synthetic_hexport_with_scores("S", "T1", left, right)).unwrap();
         let meta = read_hexport_metadata(&path).unwrap();
         std::fs::remove_file(&path).unwrap();
-        meta.quality_score
+        (meta.quality_score_left, meta.quality_score_right)
     };
 
-    assert_eq!(read(Some(0.75)), Some(0.75));
-    assert_eq!(read(Some(f32::NAN)), None);
-    assert_eq!(read(None), None);
+    assert_eq!(read(Some(0.75), Some(0.5)), (Some(0.75), Some(0.5)));
+    assert_eq!(read(None, Some(1.0)), (None, Some(1.0)));
+    assert_eq!(read(Some(f32::NAN), None), (None, None));
+}
+
+#[test]
+fn test_old_single_score_exports_are_not_supported() {
+    use common::generate_synthetic_hexport_with_meta;
+    use infant_hand_motion_viewer::data::{HandExportError, parse_hand_export};
+
+    for score in [serde_json::json!(0.8), serde_json::Value::Null] {
+        let bytes = generate_synthetic_hexport_with_meta(
+            "S",
+            "T1",
+            serde_json::json!({ "quality_trial_score": score, "video_hash": "0".repeat(64) }),
+        );
+        assert!(matches!(
+            parse_hand_export(&bytes, "t"),
+            Err(HandExportError::LegacyLayout(_))
+        ));
+        let path = std::env::temp_dir().join(format!("legacy_meta_{}.hexport", std::process::id()));
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(read_hexport_metadata(&path).is_none());
+        std::fs::remove_file(&path).unwrap();
+    }
 }
 
 #[test]
@@ -103,7 +128,8 @@ fn test_v3_metadata_header_carries_video_identity_and_ignores_unknown_keys() {
             "fps_key": "30fps",
             "video_basename": "clip.mp4",
             "video_size_bytes": 1234,
-            "quality_trial_score": 0.5,
+            "quality_trial_score_left": 0.5,
+            "quality_trial_score_right": null,
             "future_key": { "nested": [1, 2] },
         }),
     );
@@ -113,7 +139,7 @@ fn test_v3_metadata_header_carries_video_identity_and_ignores_unknown_keys() {
     assert_eq!(meta.fps_key.as_deref(), Some("30fps"));
     assert_eq!(meta.video_basename.as_deref(), Some("clip.mp4"));
     assert_eq!(meta.video_size_bytes, Some(1234));
-    assert_eq!(meta.quality_score, Some(0.5));
+    assert_eq!((meta.quality_score_left, meta.quality_score_right), (Some(0.5), None));
     assert_eq!((meta.subject.as_str(), meta.trial.as_str()), ("S", "T1"));
 
     let nulls = generate_synthetic_hexport_with_meta(
@@ -137,4 +163,17 @@ fn test_older_versions_are_rejected() {
             Err(HandExportError::UnsupportedVersion { .. })
         ));
     }
+}
+
+#[test]
+fn test_real_per_hand_score_export_loads_when_present() {
+    let dir = "/mnt/nvme1tb/infant_grasp_pipeline_cache/hand_exports/export_latest_20261023_per_hand_scores";
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let metas: Vec<_> = entries
+        .flatten()
+        .map(|entry| read_hexport_metadata(entry.path()).expect("every export has readable metadata"))
+        .collect();
+    assert_eq!(metas.len(), 547);
+    assert_eq!(metas.iter().filter(|m| m.quality_score_left.is_none()).count(), 1);
+    assert_eq!(metas.iter().filter(|m| m.quality_score_right.is_none()).count(), 10);
 }

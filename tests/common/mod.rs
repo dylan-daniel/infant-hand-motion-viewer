@@ -10,15 +10,24 @@ use flate2::write::ZlibEncoder;
 
 /// Generates valid, self-contained synthetic `.hexport` file bytes in memory for testing.
 pub fn generate_synthetic_hexport(subject: &str, trial: &str) -> Vec<u8> {
-    generate_synthetic_hexport_with_quality(subject, trial, None)
+    generate_synthetic_hexport_with_scores(subject, trial, None, None)
 }
 
-/// As `generate_synthetic_hexport`, with a `quality_trial_score` column when `quality` is given.
-pub fn generate_synthetic_hexport_with_quality(subject: &str, trial: &str, quality: Option<f32>) -> Vec<u8> {
+/// As `generate_synthetic_hexport`, with the left and right trial quality scores in the header (null when `None`).
+pub fn generate_synthetic_hexport_with_scores(
+    subject: &str,
+    trial: &str,
+    left: Option<f32>,
+    right: Option<f32>,
+) -> Vec<u8> {
     generate_synthetic_hexport_with_meta(
         subject,
         trial,
-        serde_json::json!({ "quality_trial_score": quality, "video_hash": "0".repeat(64) }),
+        serde_json::json!({
+            "quality_trial_score_left": left,
+            "quality_trial_score_right": right,
+            "video_hash": "0".repeat(64),
+        }),
     )
 }
 

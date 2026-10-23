@@ -94,9 +94,12 @@ pub struct ExplorerNode {
     pub children: Vec<ExplorerNode>,
     #[serde(default)]
     pub default_open: bool,
-    /// Trial quality score (0-1) shown beside trial files; None when unknown.
+    /// Left infant hand's trial quality score (0-1) shown beside trial files; None when unknown or not scored.
     #[serde(default)]
-    pub quality_score: Option<f32>,
+    pub quality_score_left: Option<f32>,
+    /// As `quality_score_left`, for the right infant hand.
+    #[serde(default)]
+    pub quality_score_right: Option<f32>,
 }
 
 /// What the remote answered when asked for a file the client may already hold.

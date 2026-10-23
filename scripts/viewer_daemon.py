@@ -51,15 +51,25 @@ def read_hexport_header(path: str):
         return None
 
 
+def _score(value):
+    """A quality score as a float, or None when it is null, missing or NaN."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or math.isnan(value):
+        return None
+    return float(value)
+
+
 def read_hexport_metadata(path: str):
-    """Subject, trial and trial quality score (None if absent or NaN) from a .hexport file's JSON header."""
+    """Subject, trial and the left and right trial quality scores (None if null, absent or NaN) from a .hexport
+    file's JSON header. Exports with the old single quality_trial_score are not supported and read as unknown."""
     meta = read_hexport_header(path)
-    if not meta:
-        return None, None, None
-    score = meta.get("quality_trial_score")
-    if not isinstance(score, (int, float)) or isinstance(score, bool) or math.isnan(score):
-        score = None
-    return meta.get("subject") or None, meta.get("trial") or None, score
+    if not meta or "quality_trial_score" in meta:
+        return None, None, None, None
+    return (
+        meta.get("subject") or None,
+        meta.get("trial") or None,
+        _score(meta.get("quality_trial_score_left")),
+        _score(meta.get("quality_trial_score_right")),
+    )
 
 
 def _disambiguate_names(files_list):
@@ -106,7 +116,7 @@ def scan_tree(root_path_str: str):
             unclassified = []
 
             for entry in hexport_entries:
-                subject, trial, quality_score = read_hexport_metadata(entry.path)
+                subject, trial, score_left, score_right = read_hexport_metadata(entry.path)
                 stem = Path(entry.name).stem
                 parts = stem.split("__")
                 fps_tag = parts[1] if len(parts) >= 2 else ""
@@ -120,7 +130,8 @@ def scan_tree(root_path_str: str):
                         "is_file": True,
                         "children": [],
                         "params": params_tag,
-                        "quality_score": quality_score,
+                        "quality_score_left": score_left,
+                        "quality_score_right": score_right,
                     })
                 else:
                     unclassified.append({

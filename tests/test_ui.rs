@@ -346,10 +346,11 @@ mod measures_plot {
 
 #[test]
 fn test_format_quality_score_rounds_and_clamps() {
-    assert_eq!(format_quality_score(0.9545), "0.95");
-    assert_eq!(format_quality_score(1.0), "1.00");
-    assert_eq!(format_quality_score(1.2), "1.00");
-    assert_eq!(format_quality_score(-0.1), "0.00");
+    assert_eq!(format_quality_score(Some(0.9545)), "0.95");
+    assert_eq!(format_quality_score(Some(1.0)), "1.00");
+    assert_eq!(format_quality_score(Some(1.2)), "1.00");
+    assert_eq!(format_quality_score(Some(-0.1)), "0.00");
+    assert_eq!(format_quality_score(None), "-");
 }
 
 #[test]
@@ -358,7 +359,7 @@ fn test_scan_root_attaches_quality_score_to_trial_files_only() {
     let root = dir.path();
     fs::write(
         root.join("a__30fps__p1.hexport"),
-        common::generate_synthetic_hexport_with_quality("S1", "T1", Some(0.8)),
+        common::generate_synthetic_hexport_with_scores("S1", "T1", Some(0.8), None),
     )
     .unwrap();
     fs::write(
@@ -372,11 +373,11 @@ fn test_scan_root_attaches_quality_score_to_trial_files_only() {
     let scores: Vec<_> = subject
         .children
         .iter()
-        .map(|c| (c.name.as_str(), c.quality_score))
+        .map(|c| (c.name.as_str(), c.quality_score_left, c.quality_score_right))
         .collect();
 
-    assert_eq!(subject.quality_score, None);
-    assert_eq!(scores, vec![("T1_30fps", Some(0.8)), ("T2_30fps", None)]);
+    assert_eq!((subject.quality_score_left, subject.quality_score_right), (None, None));
+    assert_eq!(scores, vec![("T1_30fps", Some(0.8), None), ("T2_30fps", None, None)]);
 }
 
 mod trial_filter {
