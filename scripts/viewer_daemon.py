@@ -189,9 +189,15 @@ def handle_get_file(req, out):
         return
 
     try:
+        st = os.stat(path_str)
+        digest = hash_cache().hash_of(path_str, st.st_size, st.st_mtime_ns)
+        hash_cache().save()
+        if req.get("if_none_match") == digest:
+            write_json_line(out, {"id": req["id"], "status": "not_modified", "hash": digest})
+            return
         with open(path_str, "rb") as f:
             data = f.read()
-        write_json_line(out, {"id": req["id"], "status": "ok", "size": len(data)})
+        write_json_line(out, {"id": req["id"], "status": "ok", "size": len(data), "hash": digest})
         out.write(data)
         out.flush()
     except Exception as e:

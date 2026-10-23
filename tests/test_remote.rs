@@ -8,7 +8,10 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use infant_hand_motion_viewer::remote::{ConnectionState, RemoteClient, RemoteConfig, RemoteVideoReply};
+use infant_hand_motion_viewer::cache::DiskCache;
+use infant_hand_motion_viewer::remote::{
+    ConnectionState, FileReply, RemoteClient, RemoteConfig, RemoteVideoReply, fetch_export,
+};
 use infant_hand_motion_viewer::util::WorkerQueue;
 use infant_hand_motion_viewer::video::sha256::sha256_hex;
 
@@ -156,6 +159,45 @@ fn test_remote_client_local_daemon_e2e() {
             .fetch_video("/definitely/not/a/file.hexport", None, &roots)
             .is_err()
     );
+
+    // Test the export cache: the server is asked by hash and only resends a file that changed
+    let hash = sha256_hex(&synthetic_bytes);
+    let known = client.fetch_file_if_changed(&export, Some(&hash)).unwrap();
+    assert_eq!(known, FileReply::NotModified { hash: hash.clone() });
+    let FileReply::Fresh { bytes, .. } = client.fetch_file_if_changed(&export, Some(&"0".repeat(64))).unwrap() else {
+        panic!("a different hash must get the file");
+    };
+    assert_eq!(bytes, synthetic_bytes);
+
+    let cache = DiskCache::new(&temp_workspace.path().join("cache"));
+    let key = format!("localhost:{export}");
+    assert_eq!(fetch_export(&client, Some(&cache), &export).unwrap(), synthetic_bytes);
+    assert_eq!(cache.known_export(&key).as_deref(), Some(hash.as_str()));
+    assert_eq!(fetch_export(&client, Some(&cache), &export).unwrap(), synthetic_bytes);
+
+    let changed = common::generate_synthetic_hexport("subject_a", "trial_changed");
+    fs::write(&hexport_path, &changed).unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&hexport_path)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() + Duration::from_secs(120))
+        .unwrap();
+    assert_eq!(fetch_export(&client, Some(&cache), &export).unwrap(), changed);
+    assert_eq!(cache.known_export(&key), Some(sha256_hex(&changed)));
+    assert_eq!(fetch_export(&client, None, &export).unwrap(), changed);
+
+    let damaged = cache
+        .dir()
+        .join("exports")
+        .join(format!("{}.hexport", sha256_hex(&changed)));
+    fs::write(&damaged, b"damaged").unwrap();
+    assert_eq!(
+        fetch_export(&client, Some(&cache), &export).unwrap(),
+        changed,
+        "refetched"
+    );
+    assert_eq!(fs::read(&damaged).unwrap(), changed);
 
     // Test disconnect
     client.disconnect();

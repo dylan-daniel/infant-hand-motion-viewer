@@ -97,6 +97,19 @@ pub struct ExplorerNode {
     pub quality_score: Option<f32>,
 }
 
+/// What the remote answered when asked for a file the client may already hold.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileReply {
+    /// The server's copy still has the client's hash; nothing was sent.
+    NotModified {
+        hash: String,
+    },
+    Fresh {
+        hash: String,
+        bytes: Vec<u8>,
+    },
+}
+
 /// What the remote answered when asked for a trial's video.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RemoteVideoReply {
@@ -511,6 +524,35 @@ impl RemoteClient {
             return Err(msg.to_string());
         }
         Ok(data)
+    }
+
+    /// Fetch a remote file unless the server's copy still hashes to `known_hash`, in which case no bytes are sent.
+    pub fn fetch_file_if_changed(&self, remote_path: &str, known_hash: Option<&str>) -> Result<FileReply, String> {
+        let (hdr, data) = {
+            let mut lock = self.session.lock().unwrap();
+            let session = lock.as_mut().ok_or_else(|| "Not connected".to_string())?;
+            let req_id = session.next_id;
+            session.next_id += 1;
+
+            let req = serde_json::json!({
+                "id": req_id,
+                "cmd": "get_file",
+                "path": remote_path,
+                "if_none_match": known_hash,
+            });
+            Self::send_command_binary(session, &req)?
+        };
+
+        let hash = hdr.get("hash").and_then(|h| h.as_str()).unwrap_or_default().to_string();
+        match hdr.get("status").and_then(|s| s.as_str()) {
+            Some("ok") => Ok(FileReply::Fresh { hash, bytes: data }),
+            Some("not_modified") => Ok(FileReply::NotModified { hash }),
+            _ => Err(hdr
+                .get("message")
+                .and_then(|s| s.as_str())
+                .unwrap_or("Failed to fetch remote file")
+                .to_string()),
+        }
     }
 
     /// Fetch the source video of an export in one request; the remote searches `roots` for the file whose SHA-256

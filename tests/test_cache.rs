@@ -2,12 +2,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use infant_hand_motion_viewer::cache::DiskCache;
+use infant_hand_motion_viewer::cache::{CACHE_DIR_NAME, default_location, format_size, is_video_hash};
 use infant_hand_motion_viewer::remote::RemoteClient;
 use infant_hand_motion_viewer::util::WorkerQueue;
-use infant_hand_motion_viewer::video::cache::{CACHE_DIR_NAME, default_location, format_size, is_video_hash};
+use infant_hand_motion_viewer::video::LoadStatus;
 use infant_hand_motion_viewer::video::decoder::ffmpeg_available;
 use infant_hand_motion_viewer::video::loader::{RemoteVideoRequest, load_remote_video};
-use infant_hand_motion_viewer::video::{LoadStatus, VideoCache};
 
 const HASH: &str = "0a71e0e35a976468a83fa20eca417841af385c14a9596c5f974274e55e52e11b";
 
@@ -38,7 +39,7 @@ impl Drop for TempDir {
 #[test]
 fn the_default_location_is_the_os_temp_dir_and_the_cache_dir_is_named() {
     assert_eq!(default_location(), std::env::temp_dir());
-    let cache = VideoCache::new(&default_location());
+    let cache = DiskCache::new(&default_location());
     assert_eq!(cache.dir(), std::env::temp_dir().join("infant-hand-motion-cache"));
     assert_eq!(CACHE_DIR_NAME, "infant-hand-motion-cache");
 }
@@ -53,8 +54,8 @@ fn only_full_sha256_hashes_are_accepted() {
 
 #[test]
 fn stored_videos_are_found_by_hash() {
-    let dir = TempDir::new("video_cache_store");
-    let cache = VideoCache::new(dir.path());
+    let dir = TempDir::new("cache_store");
+    let cache = DiskCache::new(dir.path());
     assert!(cache.get(HASH).is_none());
     let path = cache.store(HASH, b"video bytes").unwrap();
     assert_eq!(path, dir.path().join(CACHE_DIR_NAME).join(format!("{HASH}.mp4")));
@@ -68,8 +69,8 @@ fn stored_videos_are_found_by_hash() {
 
 #[test]
 fn clearing_removes_only_cached_videos() {
-    let dir = TempDir::new("video_cache_clear");
-    let cache = VideoCache::new(dir.path());
+    let dir = TempDir::new("cache_clear");
+    let cache = DiskCache::new(dir.path());
     cache.store(HASH, b"video bytes").unwrap();
     let stray = cache.dir().join("notes.txt");
     fs::write(&stray, b"keep me").unwrap();
@@ -81,8 +82,8 @@ fn clearing_removes_only_cached_videos() {
 
 #[test]
 fn clearing_a_missing_cache_is_harmless() {
-    let dir = TempDir::new("video_cache_missing");
-    assert_eq!(VideoCache::new(&dir.path().join("nowhere")).clear(), 0);
+    let dir = TempDir::new("cache_missing");
+    assert_eq!(DiskCache::new(&dir.path().join("nowhere")).clear(), 0);
 }
 
 fn request(video_hash: &str) -> RemoteVideoRequest {
@@ -112,8 +113,8 @@ fn a_cached_video_loads_without_the_remote() {
     if !ffmpeg_available() {
         return;
     }
-    let dir = TempDir::new("video_cache_load");
-    let cache = VideoCache::new(dir.path());
+    let dir = TempDir::new("cache_load");
+    let cache = DiskCache::new(dir.path());
     cache
         .store(HASH, &fs::read("tests/fixtures/ramp12.mp4").unwrap())
         .unwrap();
@@ -128,8 +129,8 @@ fn an_unreadable_cache_entry_is_dropped() {
     if !ffmpeg_available() {
         return;
     }
-    let dir = TempDir::new("video_cache_corrupt");
-    let cache = VideoCache::new(dir.path());
+    let dir = TempDir::new("cache_corrupt");
+    let cache = DiskCache::new(dir.path());
     cache.store(HASH, b"garbage").unwrap();
     let worker = WorkerQueue::new();
     let store = load_remote_video(request(HASH), Some(cache.clone()), &worker);
@@ -151,4 +152,73 @@ fn sizes_are_formatted_for_people() {
     assert_eq!(format_size(1536), "1.5 KB");
     assert_eq!(format_size(5 << 20), "5.0 MB");
     assert_eq!(format_size(3 << 30), "3.0 GB");
+}
+
+const OTHER_HASH: &str = "f0e1d2c3b4a5968778695a4b3c2d1e0f0123456789abcdef0123456789abcdef";
+
+fn export_hash(bytes: &[u8]) -> String {
+    infant_hand_motion_viewer::video::sha256::sha256_hex(bytes)
+}
+
+#[test]
+fn a_stored_export_is_found_through_its_key_and_checked_on_read() {
+    let dir = TempDir::new("cache_export_roundtrip");
+    let cache = DiskCache::new(dir.path());
+    let bytes = b"export bytes".to_vec();
+    let hash = export_hash(&bytes);
+    assert_eq!(cache.known_export("host:/a.hexport"), None);
+
+    cache.store_export("host:/a.hexport", &hash, &bytes).unwrap();
+    assert_eq!(cache.known_export("host:/a.hexport").as_deref(), Some(hash.as_str()));
+    assert_eq!(cache.known_export("host:/b.hexport"), None);
+    assert_eq!(cache.read_export(&hash), Some(bytes.clone()));
+    assert_eq!(
+        cache.size(),
+        (bytes.len() + cache.dir().join("exports/index.json").metadata().unwrap().len() as usize) as u64
+    );
+    assert!(cache.store_export("k", "not-a-hash", b"x").is_err());
+}
+
+#[test]
+fn a_damaged_export_is_dropped_instead_of_returned() {
+    let dir = TempDir::new("cache_export_damaged");
+    let cache = DiskCache::new(dir.path());
+    let hash = export_hash(b"good");
+    cache.store_export("k", &hash, b"good").unwrap();
+    let file = cache.dir().join("exports").join(format!("{hash}.hexport"));
+    fs::write(&file, b"bad").unwrap();
+    assert_eq!(cache.read_export(&hash), None);
+    assert!(!file.exists());
+    assert_eq!(cache.known_export("k"), None);
+}
+
+#[test]
+fn replacing_an_export_removes_the_old_file_unless_another_key_shares_it() {
+    let dir = TempDir::new("cache_export_replace");
+    let cache = DiskCache::new(dir.path());
+    let (old, new) = (export_hash(b"old"), export_hash(b"new"));
+    cache.store_export("a", &old, b"old").unwrap();
+    cache.store_export("b", &old, b"old").unwrap();
+    cache.store_export("a", &new, b"new").unwrap();
+    assert_eq!(cache.read_export(&old), Some(b"old".to_vec()), "b still uses it");
+    cache.store_export("b", &new, b"new").unwrap();
+    assert_eq!(cache.read_export(&old), None);
+    assert_eq!(cache.read_export(&new), Some(b"new".to_vec()));
+}
+
+#[test]
+fn clearing_removes_exports_and_videos_but_not_strays() {
+    let dir = TempDir::new("cache_export_clear");
+    let cache = DiskCache::new(dir.path());
+    cache.store(HASH, b"video bytes").unwrap();
+    cache.store_export("k", &export_hash(b"e"), b"e").unwrap();
+    let stray = cache.dir().join("notes.txt");
+    fs::write(&stray, b"keep me").unwrap();
+    assert!(cache.size() > 11);
+    assert!(cache.clear() > 11);
+    assert_eq!(cache.size(), 0);
+    assert_eq!(cache.known_export("k"), None);
+    assert!(!cache.dir().join("exports").exists());
+    assert!(stray.exists());
+    let _ = OTHER_HASH;
 }

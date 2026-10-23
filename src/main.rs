@@ -25,7 +25,7 @@ use infant_hand_motion_viewer::graphics::{
     hand_display_color, overlay_focal_length, prepare_frame, prepare_overlay_hands, required_device_features,
     supported_sample_counts,
 };
-use infant_hand_motion_viewer::remote::{ConnectionState, RemoteClient, RemoteConfig};
+use infant_hand_motion_viewer::remote::{ConnectionState, RemoteClient, RemoteConfig, fetch_export};
 use infant_hand_motion_viewer::ui::{
     FileExplorer, MeasuresView, MenuState, RootsTab, SourceMode, Transport, UiIcons, VideoNotice, VideoRootsDialog,
     draw_flags_window, draw_image_window, draw_measures_window, draw_menu_bar, draw_remote_modal,
@@ -54,12 +54,12 @@ struct OpenedSequence {
     result: Result<MeshSequence, String>,
 }
 
-const VIDEO_CACHE_SIZE_INTERVAL: Duration = Duration::from_secs(2);
+const CACHE_SIZE_INTERVAL: Duration = Duration::from_secs(2);
 
 struct DialogChannels {
     open_file_rx: Option<crossbeam_channel::Receiver<Option<PathBuf>>>,
     data_folder_rx: Option<crossbeam_channel::Receiver<Option<PathBuf>>>,
-    video_cache_rx: Option<crossbeam_channel::Receiver<Option<PathBuf>>>,
+    cache_rx: Option<crossbeam_channel::Receiver<Option<PathBuf>>>,
     video_root_rx: Option<crossbeam_channel::Receiver<Option<PathBuf>>>,
 }
 
@@ -68,7 +68,7 @@ impl DialogChannels {
         Self {
             open_file_rx: None,
             data_folder_rx: None,
-            video_cache_rx: None,
+            cache_rx: None,
             video_root_rx: None,
         }
     }
@@ -158,8 +158,8 @@ struct AppState {
 
     // Timing
     last_frame_time: Instant,
-    video_cache_size: u64,
-    video_cache_size_checked: Instant,
+    cache_size: u64,
+    cache_size_checked: Instant,
     created_at: Instant,
     window_shown: bool,
 }
@@ -200,14 +200,14 @@ impl AppState {
         };
         self.video = Some(load_remote_video(
             request(None),
-            self.settings.video_cache(),
+            self.settings.cache(),
             &self.video_worker,
         ));
         let kinds: Vec<_> = self.extra_views.iter().map(|view| view.kind).collect();
         for (view, kind) in self.extra_views.iter_mut().zip(kinds) {
             view.video = Some(load_remote_video(
                 request(Some(kind)),
-                self.settings.video_cache(),
+                self.settings.cache(),
                 &self.video_worker,
             ));
         }
@@ -269,14 +269,14 @@ impl AppState {
         let generation = self.open_generation.fetch_add(1, Ordering::SeqCst) + 1;
         let latest = Arc::clone(&self.open_generation);
         let ready = Arc::clone(&self.opened_sequence);
+        let cache = self.settings.cache();
         self.remote_open_worker.submit(move || {
             let is_current = || latest.load(Ordering::SeqCst) == generation;
             if !is_current() {
                 return;
             }
             let result = if remote {
-                client
-                    .fetch_file_bytes(&path)
+                fetch_export(&client, cache.as_ref(), &path)
                     .and_then(|bytes| MeshSequence::from_bytes(&path, &bytes).map_err(|err| err.to_string()))
             } else {
                 MeshSequence::open(&path).map_err(|err| err.to_string())
@@ -589,8 +589,8 @@ impl ApplicationHandler for AppRunner {
             dialogs: DialogChannels::new(),
             pending_remote_restore: None,
             last_frame_time: Instant::now(),
-            video_cache_size: 0,
-            video_cache_size_checked: Instant::now() - VIDEO_CACHE_SIZE_INTERVAL,
+            cache_size: 0,
+            cache_size_checked: Instant::now() - CACHE_SIZE_INTERVAL,
             created_at: Instant::now(),
             window_shown: false,
         };
@@ -868,19 +868,19 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         state.dialogs.video_root_rx = None;
     }
 
-    if let Some(ref rx) = state.dialogs.video_cache_rx
+    if let Some(ref rx) = state.dialogs.cache_rx
         && let Ok(result) = rx.try_recv()
     {
         if let Some(folder) = result {
-            state.settings.video_cache_location = Some(folder.to_string_lossy().into_owned());
-            state.video_cache_size_checked = now - VIDEO_CACHE_SIZE_INTERVAL;
+            state.settings.cache_location = Some(folder.to_string_lossy().into_owned());
+            state.cache_size_checked = now - CACHE_SIZE_INTERVAL;
         }
-        state.dialogs.video_cache_rx = None;
+        state.dialogs.cache_rx = None;
     }
 
-    if state.video_cache_size_checked.elapsed() >= VIDEO_CACHE_SIZE_INTERVAL {
-        state.video_cache_size = state.settings.video_cache_dir().size();
-        state.video_cache_size_checked = now;
+    if state.cache_size_checked.elapsed() >= CACHE_SIZE_INTERVAL {
+        state.cache_size = state.settings.cache_dir().size();
+        state.cache_size_checked = now;
     }
 
     // Track the remote connection: point the explorer at the remote tree once connected, fall back to local otherwise
@@ -1110,9 +1110,9 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         msaa_samples: state.renderer.sample_count(),
         msaa_options: state.gpu.msaa_counts.clone(),
         open_file: open_file_label,
-        video_cache_enabled: state.settings.video_cache_enabled,
-        video_cache_location: state.settings.video_cache_location.clone().unwrap_or_default(),
-        video_cache_size: state.video_cache_size,
+        cache_enabled: state.settings.cache_enabled,
+        cache_location: state.settings.cache_location.clone().unwrap_or_default(),
+        cache_size: state.cache_size,
         remote_connected: state.remote_client.is_connected(),
     };
 
@@ -1291,9 +1291,9 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
     state.settings.show_camera_marker = menu_result.state.show_camera_marker;
     state.settings.show_hand_overlay = menu_result.state.hand_overlay;
     state.settings.use_smoothed = menu_result.state.use_smoothed;
-    state.settings.video_cache_enabled = menu_result.state.video_cache_enabled;
-    state.settings.video_cache_location =
-        Some(menu_result.state.video_cache_location.clone()).filter(|location| !location.trim().is_empty());
+    state.settings.cache_enabled = menu_result.state.cache_enabled;
+    state.settings.cache_location =
+        Some(menu_result.state.cache_location.clone()).filter(|location| !location.trim().is_empty());
     if menu_result.state.msaa_samples != state.renderer.sample_count() {
         // Switch live: rebuild the pipelines and the multisampled targets together so they always agree
         let samples = state.gpu.resolve_sample_count(menu_result.state.msaa_samples);
@@ -1360,17 +1360,17 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         state.dialogs.open_file_rx = Some(rx);
     }
 
-    if menu_result.clear_video_cache_requested {
-        state.settings.video_cache_dir().clear();
-        state.video_cache_size_checked = now - VIDEO_CACHE_SIZE_INTERVAL;
+    if menu_result.clear_cache_requested {
+        state.settings.cache_dir().clear();
+        state.cache_size_checked = now - CACHE_SIZE_INTERVAL;
     }
-    if menu_result.choose_video_cache_location_requested && state.dialogs.video_cache_rx.is_none() {
+    if menu_result.choose_cache_location_requested && state.dialogs.cache_rx.is_none() {
         let (tx, rx) = crossbeam_channel::bounded(1);
         std::thread::spawn(move || {
             let res = rfd::FileDialog::new().pick_folder();
             let _ = tx.send(res);
         });
-        state.dialogs.video_cache_rx = Some(rx);
+        state.dialogs.cache_rx = Some(rx);
     }
 
     if explorer_result.choose_root_requested && state.dialogs.data_folder_rx.is_none() {

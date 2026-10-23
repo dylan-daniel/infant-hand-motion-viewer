@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::remote::{RemoteClient, RemoteVideoReply};
 use crate::util::WorkerQueue;
 
-use super::cache::{VideoCache, is_video_hash};
+use crate::cache::{DiskCache, is_video_hash};
 
 /// Debug: the hash a `kind` video is cached under, mirroring the daemon's rewrite of the source video hash.
 fn kind_hash(hash: String, kind: Option<&str>) -> String {
@@ -28,7 +28,7 @@ fn spool_path() -> PathBuf {
 }
 
 /// Decode a cached video, dropping the cache entry if it turns out to be unreadable.
-fn decode_cached(cache: &VideoCache, hash: &str, path: &Path, store: &FrameStore) -> bool {
+fn decode_cached(cache: &DiskCache, hash: &str, path: &Path, store: &FrameStore) -> bool {
     match decode_into(path, store) {
         Ok(()) => true,
         Err(_) => {
@@ -54,7 +54,7 @@ pub struct RemoteVideoRequest {
 /// to abandon the work.
 pub fn load_remote_video(
     request: RemoteVideoRequest,
-    cache: Option<VideoCache>,
+    cache: Option<DiskCache>,
     worker: &WorkerQueue,
 ) -> Arc<FrameStore> {
     let store = Arc::new(FrameStore::new());
