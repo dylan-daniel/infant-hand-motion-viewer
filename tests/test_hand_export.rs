@@ -64,10 +64,12 @@ fn test_measure_columns_load_and_default_to_nan_when_absent() {
         measures: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 70.0],
     }];
     let with = parse_hand_export(&generate_measure_hexport(&rows, true), "t").unwrap();
-    assert_eq!(with[0].measures, [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 70.0]);
+    assert_eq!(with[0].smooth.measures, [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 70.0]);
+    assert_eq!(with[0].raw.measures, [1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 71.0]);
 
     let without = parse_hand_export(&generate_measure_hexport(&rows, false), "t").unwrap();
-    assert!(without[0].measures.iter().all(|m| m.is_nan()));
+    assert!(without[0].smooth.measures.iter().all(|m| m.is_nan()));
+    assert!(without[0].raw.measures.iter().all(|m| m.is_nan()));
 }
 
 #[test]

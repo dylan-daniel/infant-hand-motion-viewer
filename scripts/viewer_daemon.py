@@ -45,7 +45,7 @@ def read_hexport_metadata(path: str):
             if len(header) < 16 or header[:4] != b"HEXP":
                 return None, None, None
             version, payload_size, compressed_size = struct.unpack("<III", header[4:16])
-            if version != 1 or payload_size == 0 or compressed_size == 0:
+            if version != 2 or payload_size == 0 or compressed_size == 0:
                 return None, None, None
             compressed = fp.read(compressed_size)
             if len(compressed) < compressed_size:

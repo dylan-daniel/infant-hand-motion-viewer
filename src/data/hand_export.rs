@@ -8,7 +8,7 @@ use glam::Vec3;
 use thiserror::Error;
 
 const MAGIC: [u8; 4] = *b"HEXP";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const HEADER_SIZE: usize = 16;
 const STRING_FIELD_WIDTH: usize = 32;
 
@@ -108,6 +108,20 @@ impl Default for ManoParams {
     }
 }
 
+/// One fit of a hand (raw WiLoR or smoothed) with its hand-shape measures.
+#[derive(Debug, Clone)]
+pub struct HandVariant {
+    pub params: ManoParams,
+    /// Hand-shape measures in [`MEASURE_COLUMNS`] order; NaN where the column is absent or the value is missing.
+    pub measures: [f32; MEASURE_COUNT],
+}
+
+impl HandExportRow {
+    pub fn variant(&self, smoothed: bool) -> &HandVariant {
+        if smoothed { &self.smooth } else { &self.raw }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct HandExportRow {
     pub subject: String,
@@ -116,12 +130,11 @@ pub struct HandExportRow {
     pub is_right: i8,
     pub hand_track_id: i32,
     pub label: String,
-    pub params: ManoParams,
+    pub raw: HandVariant,
+    pub smooth: HandVariant,
     pub scaled_focal_length: f32,
     pub img_w: i32,
     pub img_h: i32,
-    /// Hand-shape measures in [`MEASURE_COLUMNS`] order; NaN where the column is absent or the value is missing.
-    pub measures: [f32; MEASURE_COUNT],
     pub flag_same_side_infant_conflict: i8,
     pub flag_same_side_infant_unknown_conflict: i8,
     pub flag_translation_jump: i8,
@@ -300,11 +313,6 @@ pub fn parse_hand_export(raw: &[u8], source: &str) -> Result<Vec<HandExportRow>,
         }
     };
 
-    let measure_cols: Vec<Option<&ColumnInfo>> = MEASURE_COLUMNS
-        .iter()
-        .map(|name| find_col(name).filter(|c| c.dtype == DType::Float32))
-        .collect();
-
     let subject_col = require("subject")?;
     let trial_col = require("trial")?;
     let frame_col = require("frame")?;
@@ -327,65 +335,72 @@ pub fn parse_hand_export(raw: &[u8], source: &str) -> Result<Vec<HandExportRow>,
     let flag_chirality_mismatch_col = find_col("flag_chirality_mismatch");
     let flag_persistent_adult_interference_col = find_col("flag_persistent_adult_interference");
 
-    let cam_t_x_col = require("cam_t_x")?;
-    let cam_t_y_col = require("cam_t_y")?;
-    let cam_t_z_col = require("cam_t_z")?;
-
-    let mut beta_cols = Vec::with_capacity(10);
-    for i in 0..10 {
-        beta_cols.push(require(&format!("beta_{i}"))?);
+    struct VariantCols<'a> {
+        betas: Vec<&'a ColumnInfo>,
+        gorient: Vec<&'a ColumnInfo>,
+        pose: Vec<&'a ColumnInfo>,
+        cam_t: Vec<&'a ColumnInfo>,
+        measures: Vec<Option<&'a ColumnInfo>>,
     }
 
-    let mut gorient_rotvec_cols = Vec::with_capacity(3);
-    for i in 0..3 {
-        gorient_rotvec_cols.push(require(&format!("gorient_rotvec_{i}"))?);
-    }
+    let variant_cols = |prefix: &str| -> Result<VariantCols, HandExportError> {
+        let many = |stem: &str, n: usize| -> Result<Vec<&ColumnInfo>, HandExportError> {
+            (0..n).map(|i| require(&format!("{prefix}_{stem}{i}"))).collect()
+        };
+        Ok(VariantCols {
+            betas: many("beta_", 10)?,
+            gorient: many("gorient_rotvec_", 3)?,
+            pose: many("pose_rotvec_", 45)?,
+            cam_t: ["x", "y", "z"]
+                .iter()
+                .map(|axis| require(&format!("{prefix}_cam_t_{axis}")))
+                .collect::<Result<_, _>>()?,
+            measures: MEASURE_COLUMNS
+                .iter()
+                .map(|name| find_col(&format!("{prefix}_{name}")).filter(|c| c.dtype == DType::Float32))
+                .collect(),
+        })
+    };
+    let raw_cols = variant_cols("raw")?;
+    let smooth_cols = variant_cols("smooth")?;
 
-    let mut pose_rotvec_cols = Vec::with_capacity(45);
-    for i in 0..45 {
-        pose_rotvec_cols.push(require(&format!("pose_rotvec_{i}"))?);
-    }
-
-    let mut rows = Vec::with_capacity(row_count);
-    for r in 0..row_count {
-        let is_right_val = get_int8(is_right_col, r);
-        let mut betas = [0.0f32; 10];
-        for i in 0..10 {
-            betas[i] = get_float(beta_cols[i], r);
-        }
-
+    let read_variant = |cols: &VariantCols, is_right: bool, r: usize| -> HandVariant {
+        let betas = std::array::from_fn(|i| get_float(cols.betas[i], r));
         let global_orient = axis_angle_to_matrix(
-            get_float(gorient_rotvec_cols[0], r),
-            get_float(gorient_rotvec_cols[1], r),
-            get_float(gorient_rotvec_cols[2], r),
+            get_float(cols.gorient[0], r),
+            get_float(cols.gorient[1], r),
+            get_float(cols.gorient[2], r),
         );
-
         let mut hand_pose = [0.0f32; 135];
         for j in 0..15 {
             let base = j * 3;
             let mat = axis_angle_to_matrix(
-                get_float(pose_rotvec_cols[base], r),
-                get_float(pose_rotvec_cols[base + 1], r),
-                get_float(pose_rotvec_cols[base + 2], r),
+                get_float(cols.pose[base], r),
+                get_float(cols.pose[base + 1], r),
+                get_float(cols.pose[base + 2], r),
             );
-            let matrix_base = j * 9;
-            hand_pose[matrix_base..matrix_base + 9].copy_from_slice(&mat);
+            hand_pose[j * 9..j * 9 + 9].copy_from_slice(&mat);
         }
-
         let cam_t = Vec3::new(
-            get_float(cam_t_x_col, r),
-            get_float(cam_t_y_col, r),
-            get_float(cam_t_z_col, r),
+            get_float(cols.cam_t[0], r),
+            get_float(cols.cam_t[1], r),
+            get_float(cols.cam_t[2], r),
         );
+        HandVariant {
+            params: ManoParams {
+                betas,
+                global_orient,
+                hand_pose,
+                is_right,
+                cam_t,
+            },
+            measures: std::array::from_fn(|i| cols.measures[i].map_or(f32::NAN, |c| get_float(c, r))),
+        }
+    };
 
-        let params = ManoParams {
-            betas,
-            global_orient,
-            hand_pose,
-            is_right: is_right_val != 0,
-            cam_t,
-        };
-
+    let mut rows = Vec::with_capacity(row_count);
+    for r in 0..row_count {
+        let is_right_val = get_int8(is_right_col, r);
         rows.push(HandExportRow {
             subject: get_string(subject_col, r),
             trial: get_string(trial_col, r),
@@ -393,11 +408,11 @@ pub fn parse_hand_export(raw: &[u8], source: &str) -> Result<Vec<HandExportRow>,
             is_right: is_right_val,
             hand_track_id: get_int32(hand_track_id_col, r),
             label: get_string(label_col, r),
-            params,
+            raw: read_variant(&raw_cols, is_right_val != 0, r),
+            smooth: read_variant(&smooth_cols, is_right_val != 0, r),
             scaled_focal_length: get_float(scaled_focal_length_col, r),
             img_w: get_int32(img_w_col, r),
             img_h: get_int32(img_h_col, r),
-            measures: std::array::from_fn(|i| measure_cols[i].map_or(f32::NAN, |c| get_float(c, r))),
             flag_same_side_infant_conflict: get_int8_opt(flag_same_side_infant_conflict_col, r),
             flag_same_side_infant_unknown_conflict: get_int8_opt(flag_same_side_infant_unknown_conflict_col, r),
             flag_translation_jump: get_int8_opt(flag_translation_jump_col, r),

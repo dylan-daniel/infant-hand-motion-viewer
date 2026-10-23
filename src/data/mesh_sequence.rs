@@ -79,9 +79,11 @@ pub struct MeshSequence {
     /// The local `.hexport` this was read from; `None` for sequences built from bytes, which have no local frame images.
     export_path: Option<PathBuf>,
     frame_index: Arc<Mutex<Option<FrameIndex>>>,
-    frames: Vec<Frame>,
+    /// Index 0 is raw, 1 is smoothed; `smoothed` picks which one the accessors serve.
+    frames: [Vec<Frame>; 2],
     frame_numbers: Vec<i32>,
-    frame_measures: Vec<Vec<HandMeasures>>,
+    frame_measures: [Vec<Vec<HandMeasures>>; 2],
+    smoothed: bool,
     frame_flags_all: Vec<[bool; FLAG_LAYER_COUNT]>,
     frame_flags_infant_only: Vec<[bool; FLAG_LAYER_COUNT]>,
 }
@@ -104,13 +106,12 @@ impl MeshSequence {
     }
 
     fn from_rows(path_str: String, export_path: Option<PathBuf>, rows: Vec<HandExportRow>) -> Self {
-        let mut by_frame: BTreeMap<i32, Frame> = BTreeMap::new();
+        let mut by_frame: BTreeMap<i32, [Frame; 2]> = BTreeMap::new();
         let mut flags_all_by_frame: BTreeMap<i32, [bool; FLAG_LAYER_COUNT]> = BTreeMap::new();
         let mut flags_infant_by_frame: BTreeMap<i32, [bool; FLAG_LAYER_COUNT]> = BTreeMap::new();
-        let mut measures_by_frame: BTreeMap<i32, Vec<HandMeasures>> = BTreeMap::new();
+        let mut measures_by_frame: BTreeMap<i32, [Vec<HandMeasures>; 2]> = BTreeMap::new();
 
         for row in rows {
-            let hand = mano_forward(&row.params);
             let row_flags = [
                 row.flag_same_side_infant_conflict != 0,
                 row.flag_same_side_infant_unknown_conflict != 0,
@@ -125,29 +126,38 @@ impl MeshSequence {
                 row.flag_persistent_adult_interference != 0,
             ];
 
-            let data = HandData {
-                verts: hand.verts,
-                joints: hand.joints,
-                is_right: row.params.is_right,
-                hand_track_id: row.hand_track_id,
-                label: row.label.clone(),
-                camera: Some(HandCamera {
-                    cam_t: row.params.cam_t,
-                    focal_length: row.scaled_focal_length,
-                    img_w: row.img_w.max(0) as u32,
-                    img_h: row.img_h.max(0) as u32,
-                }),
-                flags: row_flags,
-            };
+            let datas = [&row.raw, &row.smooth].map(|variant| {
+                let hand = mano_forward(&variant.params);
+                HandData {
+                    verts: hand.verts,
+                    joints: hand.joints,
+                    is_right: variant.params.is_right,
+                    hand_track_id: row.hand_track_id,
+                    label: row.label.clone(),
+                    camera: Some(HandCamera {
+                        cam_t: variant.params.cam_t,
+                        focal_length: row.scaled_focal_length,
+                        img_w: row.img_w.max(0) as u32,
+                        img_h: row.img_h.max(0) as u32,
+                    }),
+                    flags: row_flags,
+                }
+            });
+            let [raw_data, smooth_data] = datas;
 
             let frame_num = row.frame;
-            measures_by_frame.entry(frame_num).or_default().push(HandMeasures {
-                is_right: row.params.is_right,
-                is_infant: row.label == "infant",
-                hand_track_id: row.hand_track_id,
-                values: row.measures,
-            });
-            by_frame.entry(frame_num).or_default().push(data);
+            let measures = measures_by_frame.entry(frame_num).or_default();
+            for (slot, variant) in [&row.raw, &row.smooth].into_iter().enumerate() {
+                measures[slot].push(HandMeasures {
+                    is_right: variant.params.is_right,
+                    is_infant: row.label == "infant",
+                    hand_track_id: row.hand_track_id,
+                    values: variant.measures,
+                });
+            }
+            let hands = by_frame.entry(frame_num).or_default();
+            hands[0].push(raw_data);
+            hands[1].push(smooth_data);
 
             let flags_all = flags_all_by_frame.entry(frame_num).or_insert([false; FLAG_LAYER_COUNT]);
             let flags_infant = flags_infant_by_frame
@@ -165,18 +175,22 @@ impl MeshSequence {
             }
         }
 
-        let mut frames = Vec::with_capacity(by_frame.len());
+        let mut frames: [Vec<Frame>; 2] = Default::default();
         let mut frame_numbers = Vec::with_capacity(by_frame.len());
-        let mut frame_measures = Vec::with_capacity(by_frame.len());
+        let mut frame_measures: [Vec<Vec<HandMeasures>>; 2] = Default::default();
         let mut frame_flags_all = Vec::with_capacity(by_frame.len());
         let mut frame_flags_infant_only = Vec::with_capacity(by_frame.len());
 
         for (frame_num, hands) in by_frame {
             frame_numbers.push(frame_num);
-            frame_measures.push(measures_by_frame.remove(&frame_num).unwrap());
+            let [raw_m, smooth_m] = measures_by_frame.remove(&frame_num).unwrap();
+            frame_measures[0].push(raw_m);
+            frame_measures[1].push(smooth_m);
             frame_flags_all.push(flags_all_by_frame.remove(&frame_num).unwrap());
             frame_flags_infant_only.push(flags_infant_by_frame.remove(&frame_num).unwrap());
-            frames.push(hands);
+            let [raw_h, smooth_h] = hands;
+            frames[0].push(raw_h);
+            frames[1].push(smooth_h);
         }
 
         Self {
@@ -186,13 +200,31 @@ impl MeshSequence {
             frames,
             frame_numbers,
             frame_measures,
+            smoothed: true,
             frame_flags_all,
             frame_flags_infant_only,
         }
     }
 
     pub fn frame_count(&self) -> usize {
-        self.frames.len()
+        self.frame_numbers.len()
+    }
+
+    pub fn is_smoothed(&self) -> bool {
+        self.smoothed
+    }
+
+    /// Chooses whether hands and measures come from the smoothed fit or WiLoR's raw one.
+    pub fn set_smoothed(&mut self, smoothed: bool) {
+        self.smoothed = smoothed;
+    }
+
+    fn active_frames(&self) -> &[Frame] {
+        &self.frames[usize::from(self.smoothed)]
+    }
+
+    fn active_measures(&self) -> &[Vec<HandMeasures>] {
+        &self.frame_measures[usize::from(self.smoothed)]
     }
 
     pub fn path(&self) -> &str {
@@ -214,16 +246,16 @@ impl MeshSequence {
     }
 
     pub fn hand_count(&self, index: usize) -> usize {
-        self.frames.get(index).map_or(0, |f| f.len())
+        self.active_frames().get(index).map_or(0, |f| f.len())
     }
 
     pub fn load_frame(&self, index: usize) -> Option<&Frame> {
-        self.frames.get(index)
+        self.active_frames().get(index)
     }
 
     /// Whether any hand in the export carries a hand-shape measure value.
     pub fn has_measure_data(&self) -> bool {
-        self.frame_measures
+        self.active_measures()
             .iter()
             .flatten()
             .any(|hand| hand.values.iter().any(|v| v.is_finite()))
@@ -236,7 +268,7 @@ impl MeshSequence {
             return Vec::new();
         }
         let mut series: Vec<MeasureSeries> = Vec::new();
-        for (index, hands) in self.frame_measures.iter().enumerate() {
+        for (index, hands) in self.active_measures().iter().enumerate() {
             for hand in hands.iter().filter(|h| per_track || h.is_infant) {
                 let track = per_track.then_some(hand.hand_track_id);
                 let slot = match series
@@ -253,7 +285,7 @@ impl MeshSequence {
                             },
                             is_right: hand.is_right,
                             hand_track_id: track,
-                            values: vec![f32::NAN; self.frames.len()],
+                            values: vec![f32::NAN; self.frame_numbers.len()],
                         });
                         series.len() - 1
                     }

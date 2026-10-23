@@ -28,19 +28,21 @@ pub fn generate_synthetic_hexport_with_quality(subject: &str, trial: &str, quali
         ("scaled_focal_length", 0), // Float32
         ("img_w", 1),
         ("img_h", 1),
-        ("cam_t_x", 0),
-        ("cam_t_y", 0),
-        ("cam_t_z", 0),
     ];
 
-    for i in 0..10 {
-        columns.push((Box::leak(format!("beta_{i}").into_boxed_str()), 0));
-    }
-    for i in 0..3 {
-        columns.push((Box::leak(format!("gorient_rotvec_{i}").into_boxed_str()), 0));
-    }
-    for i in 0..45 {
-        columns.push((Box::leak(format!("pose_rotvec_{i}").into_boxed_str()), 0));
+    for prefix in ["raw", "smooth"] {
+        for axis in ["x", "y", "z"] {
+            columns.push((Box::leak(format!("{prefix}_cam_t_{axis}").into_boxed_str()), 0));
+        }
+        for i in 0..10 {
+            columns.push((Box::leak(format!("{prefix}_beta_{i}").into_boxed_str()), 0));
+        }
+        for i in 0..3 {
+            columns.push((Box::leak(format!("{prefix}_gorient_rotvec_{i}").into_boxed_str()), 0));
+        }
+        for i in 0..45 {
+            columns.push((Box::leak(format!("{prefix}_pose_rotvec_{i}").into_boxed_str()), 0));
+        }
     }
 
     // Optional flags
@@ -130,7 +132,7 @@ pub fn generate_synthetic_hexport_with_quality(subject: &str, trial: &str, quali
 
     let mut file_bytes = Vec::new();
     file_bytes.extend_from_slice(b"HEXP");
-    file_bytes.extend_from_slice(&1u32.to_le_bytes()); // Version 1
+    file_bytes.extend_from_slice(&2u32.to_le_bytes()); // Version 2
     file_bytes.extend_from_slice(&payload_size.to_le_bytes());
     file_bytes.extend_from_slice(&compressed_size.to_le_bytes());
     file_bytes.extend_from_slice(&compressed);
@@ -249,22 +251,24 @@ pub fn generate_measure_hexport(rows: &[MeasureRow], with_measures: bool) -> Vec
         ("scaled_focal_length".into(), 0),
         ("img_w".into(), 1),
         ("img_h".into(), 1),
-        ("cam_t_x".into(), 0),
-        ("cam_t_y".into(), 0),
-        ("cam_t_z".into(), 0),
     ];
-    for i in 0..10 {
-        names.push((format!("beta_{i}"), 0));
-    }
-    for i in 0..3 {
-        names.push((format!("gorient_rotvec_{i}"), 0));
-    }
-    for i in 0..45 {
-        names.push((format!("pose_rotvec_{i}"), 0));
-    }
-    if with_measures {
-        for name in infant_hand_motion_viewer::data::MEASURE_COLUMNS {
-            names.push((name.to_string(), 0));
+    for prefix in ["raw", "smooth"] {
+        for axis in ["x", "y", "z"] {
+            names.push((format!("{prefix}_cam_t_{axis}"), 0));
+        }
+        for i in 0..10 {
+            names.push((format!("{prefix}_beta_{i}"), 0));
+        }
+        for i in 0..3 {
+            names.push((format!("{prefix}_gorient_rotvec_{i}"), 0));
+        }
+        for i in 0..45 {
+            names.push((format!("{prefix}_pose_rotvec_{i}"), 0));
+        }
+        if with_measures {
+            for name in infant_hand_motion_viewer::data::MEASURE_COLUMNS {
+                names.push((format!("{prefix}_{name}"), 0));
+            }
         }
     }
 
@@ -280,10 +284,20 @@ pub fn generate_measure_hexport(rows: &[MeasureRow], with_measures: bool) -> Vec
         for row in rows {
             match *dtype {
                 0 => {
+                    let measure = name
+                        .strip_prefix("smooth_")
+                        .or_else(|| name.strip_prefix("raw_"))
+                        .unwrap_or(name);
                     let value = infant_hand_motion_viewer::data::MEASURE_COLUMNS
                         .iter()
-                        .position(|m| m == name)
-                        .map(|i| row.measures[i])
+                        .position(|m| *m == measure)
+                        .map(|i| {
+                            if name.starts_with("raw_") {
+                                row.measures[i] + 1.0
+                            } else {
+                                row.measures[i]
+                            }
+                        })
                         .unwrap_or(if name == "scaled_focal_length" { 1000.0 } else { 0.0 });
                     payload.extend_from_slice(&value.to_le_bytes());
                 }
@@ -317,7 +331,7 @@ pub fn generate_measure_hexport(rows: &[MeasureRow], with_measures: bool) -> Vec
     let compressed = encoder.finish().unwrap();
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"HEXP");
-    bytes.extend_from_slice(&1u32.to_le_bytes());
+    bytes.extend_from_slice(&2u32.to_le_bytes());
     bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
     bytes.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
     bytes.extend_from_slice(&compressed);

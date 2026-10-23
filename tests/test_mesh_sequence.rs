@@ -137,7 +137,7 @@ fn test_hands_keep_the_camera_they_were_fitted_under() {
     let seq = MeshSequence::open(&export.path).unwrap();
 
     let camera = seq.load_frame(0).unwrap()[0].camera.expect("camera is kept");
-    assert_eq!(camera.cam_t, row.params.cam_t);
+    assert_eq!(camera.cam_t, row.smooth.params.cam_t);
     assert_eq!(camera.focal_length, row.scaled_focal_length);
     assert_eq!((camera.img_w, camera.img_h), (row.img_w as u32, row.img_h as u32));
 }
@@ -185,4 +185,16 @@ fn test_no_measure_data_without_the_columns() {
     let seq = MeshSequence::from_bytes("t", &bytes).unwrap();
     assert!(!seq.has_measure_data());
     assert!(seq.measure_series(0, false)[0].values[0].is_nan());
+}
+
+#[test]
+fn test_raw_smoothed_toggle_switches_measures() {
+    let bytes = common::generate_measure_hexport(&[measure_row(0, true, 1, "infant", 0.5)], true);
+    let mut seq = MeshSequence::from_bytes("t", &bytes).unwrap();
+    assert!(seq.is_smoothed());
+    assert_eq!(seq.measure_series(0, false)[0].values[0], 0.5);
+    seq.set_smoothed(false);
+    assert_eq!(seq.measure_series(0, false)[0].values[0], 1.5);
+    assert_eq!(seq.frame_count(), 1);
+    assert!(seq.load_frame(0).is_some());
 }
