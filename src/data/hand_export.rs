@@ -8,6 +8,8 @@ use glam::Vec3;
 use serde::Deserialize;
 use thiserror::Error;
 
+use super::grasp_events::GraspRow;
+
 const MAGIC: [u8; 4] = *b"HEXP";
 const VERSION: u32 = 4;
 const HEADER_SIZE: usize = 20;
@@ -472,6 +474,9 @@ pub struct HexportMetadata {
     pub video_basename: Option<String>,
     #[serde(default)]
     pub video_size_bytes: Option<u64>,
+    /// The trial's grasp events and hands used, as the pipeline recorded them; None when it had no row for the trial.
+    #[serde(default)]
+    pub grasp_events: Option<GraspRow>,
 }
 
 fn finite_score<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option<f32>, D::Error> {

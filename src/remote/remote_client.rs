@@ -100,11 +100,11 @@ pub struct ExplorerNode {
     /// As `quality_score_left`, for the right infant hand.
     #[serde(default)]
     pub quality_score_right: Option<f32>,
-    /// Subject and trial of a trial file, to look it up in the grasp CSV; empty for folders.
+    /// Whether the trial's grasp events mark the left / right hand as used; None when unknown or no events.
     #[serde(default)]
-    pub subject: String,
+    pub left_hand_used: Option<bool>,
     #[serde(default)]
-    pub trial: String,
+    pub right_hand_used: Option<bool>,
 }
 
 /// What the remote answered when asked for a file the client may already hold.

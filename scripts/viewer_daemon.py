@@ -58,17 +58,24 @@ def _score(value):
     return float(value)
 
 
+def _used(value):
+    return value if isinstance(value, bool) else None
+
+
 def read_hexport_metadata(path: str):
-    """Subject, trial and the left and right trial quality scores (None if null, absent or NaN) from a .hexport
-    file's JSON header."""
+    """Subject, trial, the left and right trial quality scores (None if null, absent or NaN) and whether the left and
+    right hand are marked used by the header's grasp events (None if unknown) from a .hexport file's JSON header."""
     meta = read_hexport_header(path)
     if not meta:
-        return None, None, None, None
+        return None, None, None, None, None, None
+    events = meta.get("grasp_events") or {}
     return (
         meta.get("subject") or None,
         meta.get("trial") or None,
         _score(meta.get("quality_trial_score_left")),
         _score(meta.get("quality_trial_score_right")),
+        _used(events.get("left_hand_used")),
+        _used(events.get("right_hand_used")),
     )
 
 
@@ -116,7 +123,7 @@ def scan_tree(root_path_str: str):
             unclassified = []
 
             for entry in hexport_entries:
-                subject, trial, score_left, score_right = read_hexport_metadata(entry.path)
+                subject, trial, score_left, score_right, left_used, right_used = read_hexport_metadata(entry.path)
                 stem = Path(entry.name).stem
                 parts = stem.split("__")
                 fps_tag = parts[1] if len(parts) >= 2 else ""
@@ -132,8 +139,8 @@ def scan_tree(root_path_str: str):
                         "params": params_tag,
                         "quality_score_left": score_left,
                         "quality_score_right": score_right,
-                        "subject": subject,
-                        "trial": trial,
+                        "left_hand_used": left_used,
+                        "right_hand_used": right_used,
                     })
                 else:
                     unclassified.append({

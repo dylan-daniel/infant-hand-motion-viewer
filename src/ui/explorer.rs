@@ -13,7 +13,7 @@ use dear_imgui_rs::{
 };
 
 use crate::data::hand_export::{HexportMetadata, read_hexport_metadata};
-use crate::data::{GraspEventSet, LEFT_HAND_COLOR, RIGHT_HAND_COLOR};
+use crate::data::{LEFT_HAND_COLOR, RIGHT_HAND_COLOR, unused_sides};
 use crate::remote::{ExplorerNode, RemoteClient};
 use crate::ui::icons::UiIcons;
 use crate::ui::trial_filter::TrialFilter;
@@ -317,8 +317,8 @@ impl FileExplorer {
             default_open: true,
             quality_score_left: None,
             quality_score_right: None,
-            subject: String::new(),
-            trial: String::new(),
+            left_hand_used: None,
+            right_hand_used: None,
         };
 
         let mut subdirs = Vec::new();
@@ -369,8 +369,8 @@ impl FileExplorer {
             params_tag: String,
             quality_score_left: Option<f32>,
             quality_score_right: Option<f32>,
-            subject: String,
-            trial: String,
+            left_hand_used: Option<bool>,
+            right_hand_used: Option<bool>,
         }
 
         let mut subject_groups: BTreeMap<String, Vec<FileEntry>> = BTreeMap::new();
@@ -390,6 +390,7 @@ impl FileExplorer {
                 trial,
                 quality_score_left,
                 quality_score_right,
+                grasp_events,
                 ..
             }) = read_hexport_metadata(path)
             {
@@ -398,9 +399,9 @@ impl FileExplorer {
                 } else {
                     trial.clone()
                 };
-                subject_groups.entry(subject.clone()).or_default().push(FileEntry {
-                    subject,
-                    trial,
+                subject_groups.entry(subject).or_default().push(FileEntry {
+                    left_hand_used: grasp_events.as_ref().and_then(|row| row.left_used),
+                    right_hand_used: grasp_events.as_ref().and_then(|row| row.right_used),
                     path: path.to_string_lossy().into_owned(),
                     display_name,
                     params_tag: params_tag.to_string(),
@@ -416,8 +417,8 @@ impl FileExplorer {
                     default_open: false,
                     quality_score_left: None,
                     quality_score_right: None,
-                    subject: String::new(),
-                    trial: String::new(),
+                    left_hand_used: None,
+                    right_hand_used: None,
                 });
             }
         }
@@ -446,8 +447,8 @@ impl FileExplorer {
                     default_open: false,
                     quality_score_left: entry.quality_score_left,
                     quality_score_right: entry.quality_score_right,
-                    subject: entry.subject,
-                    trial: entry.trial,
+                    left_hand_used: entry.left_hand_used,
+                    right_hand_used: entry.right_hand_used,
                 });
             }
 
@@ -461,8 +462,8 @@ impl FileExplorer {
                 default_open: false,
                 quality_score_left: None,
                 quality_score_right: None,
-                subject: String::new(),
-                trial: String::new(),
+                left_hand_used: None,
+                right_hand_used: None,
             });
         }
 
@@ -475,7 +476,7 @@ impl FileExplorer {
         &mut self,
         ui: &Ui,
         icons: &UiIcons,
-        hide_unused: Option<&GraspEventSet>,
+        hide_unused: bool,
         dock_id: Option<Id>,
     ) -> ExplorerResult {
         self.poll();
@@ -748,10 +749,11 @@ impl FileExplorer {
                 .span_full_width(true)
                 .push();
             let right = Self::draw_node_label(ui, draw.icons.file_hexport, &node.name, node_left);
-            let (hide_left, hide_right) = draw
-                .hide_unused
-                .and_then(|grasp| grasp.row(&node.subject, &node.trial))
-                .map_or((false, false), |row| row.unused_sides());
+            let (hide_left, hide_right) = match (node.left_hand_used, node.right_hand_used) {
+                (None, None) => (false, false),
+                (left, right) if draw.hide_unused => unused_sides(left, right),
+                _ => (false, false),
+            };
             let left = (!hide_left).then_some(node.quality_score_left);
             let right_score = (!hide_right).then_some(node.quality_score_right);
             let has_score = node.quality_score_left.is_some() || node.quality_score_right.is_some();
@@ -879,8 +881,8 @@ struct TreeDraw<'a> {
     visible: Option<&'a HashSet<String>>,
     /// The frame after a filter was cleared, when folders go back to the state the user had.
     restoring_open: bool,
-    /// Grasp rows to hide the scores of unused hands with; `None` shows every score.
-    hide_unused: Option<&'a GraspEventSet>,
+    /// Hide the scores of hands the trial's grasp events do not mark as used.
+    hide_unused: bool,
 }
 
 impl Default for FileExplorer {

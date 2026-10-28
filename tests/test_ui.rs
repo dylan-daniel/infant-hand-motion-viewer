@@ -364,12 +364,20 @@ fn test_scan_root_attaches_quality_score_to_trial_files_only() {
     .unwrap();
     fs::write(
         root.join("b__30fps__p2.hexport"),
-        common::generate_synthetic_hexport("S1", "T2"),
+        common::generate_synthetic_hexport_with_meta(
+            "S1",
+            "T2",
+            serde_json::json!({"grasp_events": {"left_hand_used": false, "right_hand_used": true}}),
+        ),
     )
     .unwrap();
 
     let tree = FileExplorer::scan_root(root);
     let subject = &tree.children[0];
+    assert_eq!(
+        (subject.children[1].left_hand_used, subject.children[1].right_hand_used),
+        (Some(false), Some(true))
+    );
     let scores: Vec<_> = subject
         .children
         .iter()
@@ -377,10 +385,6 @@ fn test_scan_root_attaches_quality_score_to_trial_files_only() {
         .collect();
 
     assert_eq!((subject.quality_score_left, subject.quality_score_right), (None, None));
-    assert_eq!(
-        (subject.children[0].subject.as_str(), subject.children[0].trial.as_str()),
-        ("S1", "T1")
-    );
     assert_eq!(scores, vec![("T1_30fps", Some(0.8), None), ("T2_30fps", None, None)]);
 }
 

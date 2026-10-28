@@ -24,10 +24,7 @@ pub use icons::UiIcons;
 pub use image_view::{ImageViewResult, VideoNotice, draw_image_window};
 pub use measures::{MEASURE_TITLES, MeasuresView, draw_measures_window};
 pub use menu_bar::{MenuResult, MenuState, draw_menu_bar};
-pub use modals::{
-    GraspEventsDialog, GraspEventsResult, RootsTab, VideoRootsDialog, VideoRootsResult, draw_grasp_events_modal,
-    draw_remote_modal, draw_video_roots_modal,
-};
+pub use modals::{RootsTab, VideoRootsDialog, VideoRootsResult, draw_remote_modal, draw_video_roots_modal};
 pub use transport::{
     FLAG_COLORS, FLAG_LAYERS, FLAG_NAMES, FlagLayer, PLAYBACK_SPEEDS, SliderGeometry, Transport, TransportState,
     draw_transport_bar, format_speed, next_playback_speed,

@@ -20,19 +20,18 @@ use dear_imgui_winit::{HiDpiMode, WinitPlatform};
 use infant_hand_motion_viewer::assets;
 use infant_hand_motion_viewer::config::Config;
 use infant_hand_motion_viewer::data::{
-    GraspEventSet, GraspMark, HandData, MeshSequence, Transform, compute_transform, next_event_frame, reference_depth,
+    GraspMark, HandData, MeshSequence, Transform, compute_transform, next_event_frame, reference_depth,
 };
 use infant_hand_motion_viewer::graphics::{
     Camera, FrameGpu, Framebuffer, FreeCamera, Gpu, HandOverlay, ImageTexture, OrbitCamera, Renderer, SceneRender,
     hand_display_color, overlay_focal_length, prepare_frame, prepare_overlay_hands, required_device_features,
     supported_sample_counts,
 };
-use infant_hand_motion_viewer::grasp_sources::{GraspSource, LoadedSource, load_sources, merge_loaded};
 use infant_hand_motion_viewer::remote::{ConnectionState, RemoteClient, RemoteConfig, fetch_export};
 use infant_hand_motion_viewer::ui::{
-    FileExplorer, GraspEventsDialog, GraspPaneState, MeasuresView, MenuState, RootsTab, SourceMode, Transport, UiIcons,
-    VideoNotice, VideoRootsDialog, draw_flags_window, draw_grasp_events_modal, draw_grasp_window, draw_image_window,
-    draw_measures_window, draw_menu_bar, draw_remote_modal, draw_video_roots_modal, draw_viewport_window,
+    FileExplorer, GraspPaneState, MeasuresView, MenuState, RootsTab, SourceMode, Transport, UiIcons, VideoNotice,
+    VideoRootsDialog, draw_flags_window, draw_grasp_window, draw_image_window, draw_measures_window, draw_menu_bar,
+    draw_remote_modal, draw_video_roots_modal, draw_viewport_window,
 };
 use infant_hand_motion_viewer::util::WorkerQueue;
 use infant_hand_motion_viewer::util::window_placement::{MonitorRect, is_position_reachable};
@@ -64,7 +63,6 @@ struct DialogChannels {
     data_folder_rx: Option<crossbeam_channel::Receiver<Option<PathBuf>>>,
     cache_rx: Option<crossbeam_channel::Receiver<Option<PathBuf>>>,
     video_root_rx: Option<crossbeam_channel::Receiver<Option<PathBuf>>>,
-    grasp_file_rx: Option<crossbeam_channel::Receiver<Option<PathBuf>>>,
 }
 
 impl DialogChannels {
@@ -74,7 +72,6 @@ impl DialogChannels {
             data_folder_rx: None,
             cache_rx: None,
             video_root_rx: None,
-            grasp_file_rx: None,
         }
     }
 }
@@ -140,14 +137,8 @@ struct AppState {
     explorer: FileExplorer,
     show_remote_modal: bool,
     video_roots_dialog: VideoRootsDialog,
-    grasp_dialog: GraspEventsDialog,
-    grasp_loaded: Vec<LoadedSource>,
-    grasp_set: GraspEventSet,
     /// (left, right) hidden in the scene and overlay as of the last prepared frame.
     applied_hidden_hands: (bool, bool),
-    grasp_ready: Arc<Mutex<Option<Vec<LoadedSource>>>>,
-    /// Counts grasp-event loads, so only the newest one's result is installed.
-    grasp_generation: Arc<AtomicU64>,
     measures_view: MeasuresView,
     remote_connect_in_flight: bool,
     remote_config: RemoteConfig,
@@ -302,22 +293,6 @@ impl AppState {
                     start_frame,
                     result,
                 });
-            }
-        });
-    }
-
-    /// Loads every grasp-events CSV on a worker; a newer call makes an older one's result be dropped.
-    fn reload_grasp_events(&mut self) {
-        let sources = self.settings.grasp_event_sources.clone();
-        let client = self.remote_client.clone();
-        let cache = self.settings.cache();
-        let generation = self.grasp_generation.fetch_add(1, Ordering::SeqCst) + 1;
-        let latest = Arc::clone(&self.grasp_generation);
-        let ready = Arc::clone(&self.grasp_ready);
-        std::thread::spawn(move || {
-            let loaded = load_sources(&sources, &client, cache.as_ref());
-            if latest.load(Ordering::SeqCst) == generation {
-                *ready.lock().unwrap() = Some(loaded);
             }
         });
     }
@@ -598,12 +573,7 @@ impl ApplicationHandler for AppRunner {
             explorer,
             show_remote_modal: false,
             video_roots_dialog: VideoRootsDialog::default(),
-            grasp_dialog: GraspEventsDialog::default(),
-            grasp_loaded: Vec::new(),
-            grasp_set: GraspEventSet::default(),
             applied_hidden_hands: (false, false),
-            grasp_ready: Arc::new(Mutex::new(None)),
-            grasp_generation: Arc::new(AtomicU64::new(0)),
             measures_view: MeasuresView::default(),
             remote_connect_in_flight: false,
             remote_config,
@@ -629,8 +599,6 @@ impl ApplicationHandler for AppRunner {
             created_at: Instant::now(),
             window_shown: false,
         };
-
-        app_state.reload_grasp_events();
 
         if let Some(last_folder) = app_state.settings.last_folder.clone()
             && app_state.settings.last_folder_remote
@@ -697,7 +665,7 @@ impl ApplicationHandler for AppRunner {
                     state.keys_down.remove(&key);
                 }
 
-                let modal_open = state.show_remote_modal || state.video_roots_dialog.open || state.grasp_dialog.open;
+                let modal_open = state.show_remote_modal || state.video_roots_dialog.open;
                 let want_text = state.imgui.io().want_text_input();
 
                 if pressed && !repeat {
@@ -750,8 +718,7 @@ impl ApplicationHandler for AppRunner {
                 if button == MouseButton::Right {
                     let pressed = el_state == ElementState::Pressed;
                     state.right_mouse_down = pressed;
-                    let modal_open =
-                        state.show_remote_modal || state.video_roots_dialog.open || state.grasp_dialog.open;
+                    let modal_open = state.show_remote_modal || state.video_roots_dialog.open;
                     if pressed && state.viewport_hovered && !modal_open {
                         if state.shift_down {
                             state.panning = true;
@@ -906,28 +873,6 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         state.dialogs.video_root_rx = None;
     }
 
-    if let Some(loaded) = state.grasp_ready.lock().unwrap().take() {
-        state.grasp_set = merge_loaded(&loaded);
-        state.grasp_loaded = loaded;
-    }
-
-    if let Some(ref rx) = state.dialogs.grasp_file_rx
-        && let Ok(result) = rx.try_recv()
-    {
-        if let Some(file) = result {
-            let source = GraspSource {
-                path: file.to_string_lossy().into_owned(),
-                remote: false,
-            };
-            if !state.settings.grasp_event_sources.contains(&source) {
-                state.settings.grasp_event_sources.push(source);
-                let _ = state.settings.save(&state.config_path);
-                state.reload_grasp_events();
-            }
-        }
-        state.dialogs.grasp_file_rx = None;
-    }
-
     if let Some(ref rx) = state.dialogs.cache_rx
         && let Ok(result) = rx.try_recv()
     {
@@ -955,9 +900,6 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         state.settings.remote_data_folder = remote.root_folder.clone();
         let _ = state.settings.save(&state.config_path);
 
-        if state.settings.grasp_event_sources.iter().any(|source| source.remote) {
-            state.reload_grasp_events();
-        }
         state.explorer.set_remote_root(&remote.root_folder);
         state.explorer.set_mode(SourceMode::Remote);
         state.explorer.refresh();
@@ -987,7 +929,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
     }
 
     // Camera WASD / QE movement
-    let modal_open = state.show_remote_modal || state.video_roots_dialog.open || state.grasp_dialog.open;
+    let modal_open = state.show_remote_modal || state.video_roots_dialog.open;
     let want_text = state.imgui.io().want_text_input();
     if !want_text && !modal_open {
         let mut forward = 0.0f32;
@@ -1065,7 +1007,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
                     .settings
                     .pause_at_events
                     .then(|| {
-                        let marks = open_trial_marks(&state.grasp_set, seq, state.video.as_deref());
+                        let marks = open_trial_marks(seq, state.video.as_deref());
                         next_event_frame(&marks, from, (from + step).min(frame_count - 1))
                     })
                     .flatten();
@@ -1094,7 +1036,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
     let frame_count = state.sequence.as_ref().map(|s| s.frame_count()).unwrap_or(0);
 
     if let Some(ref seq) = state.sequence {
-        let hidden = hidden_hands(&state.grasp_set, seq, state.settings.hide_unused_hands);
+        let hidden = hidden_hands(seq, state.settings.hide_unused_hands);
         if hidden != state.applied_hidden_hands {
             state.applied_hidden_hands = hidden;
             state.loaded_frame = None;
@@ -1204,12 +1146,9 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         remote_connected: state.remote_client.is_connected(),
     };
 
-    let grasp_row = state.sequence.as_ref().and_then(|seq| {
-        let meta = seq.meta();
-        state.grasp_set.row(&meta.subject, &meta.trial)
-    });
+    let grasp_row = state.sequence.as_ref().and_then(|seq| seq.meta().grasp_events.as_ref());
     let grasp_marks = match &state.sequence {
-        Some(seq) => open_trial_marks(&state.grasp_set, seq, state.video.as_deref()),
+        Some(seq) => open_trial_marks(seq, state.video.as_deref()),
         None => Vec::new(),
     };
 
@@ -1238,16 +1177,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
     );
 
     let measures_menu_in = state.settings.show_measures;
-    let (
-        menu_result,
-        explorer_result,
-        viewport_result,
-        image_result,
-        extra_results,
-        measures_scrub,
-        roots_result,
-        grasp_result,
-    ) = {
+    let (menu_result, explorer_result, viewport_result, image_result, extra_results, measures_scrub, roots_result) = {
         let ui = state.imgui.frame();
 
         let menu_result = draw_menu_bar(ui, menu_state);
@@ -1367,11 +1297,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         let grasp_state = match (&state.sequence, grasp_row) {
             (None, _) => GraspPaneState::NoSequence,
             (Some(_), Some(row)) => GraspPaneState::Row(row),
-            (Some(_), None) if state.grasp_set.is_empty() => GraspPaneState::NoFiles,
-            (Some(seq), None) => GraspPaneState::NoRow {
-                subject: &seq.meta().subject,
-                trial: &seq.meta().trial,
-            },
+            (Some(_), None) => GraspPaneState::NoEvents,
         };
         draw_grasp_window(
             ui,
@@ -1383,25 +1309,16 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             None,
         );
 
-        let explorer_result = state.explorer.draw_explorer_window(
-            ui,
-            &state.icons,
-            state.settings.hide_unused_hands.then_some(&state.grasp_set),
-            None,
-        );
+        let explorer_result =
+            state
+                .explorer
+                .draw_explorer_window(ui, &state.icons, state.settings.hide_unused_hands, None);
 
         let roots_result = draw_video_roots_modal(
             ui,
             &mut state.video_roots_dialog,
             &mut state.settings.local_video_roots,
             &mut state.settings.remote_video_roots,
-            state.remote_client.is_connected(),
-        );
-        let grasp_result = draw_grasp_events_modal(
-            ui,
-            &mut state.grasp_dialog,
-            &mut state.settings.grasp_event_sources,
-            &state.grasp_loaded,
             state.remote_client.is_connected(),
         );
         draw_remote_modal(
@@ -1434,7 +1351,6 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             extra_results,
             measures_scrub,
             roots_result,
-            grasp_result,
         )
     };
 
@@ -1492,21 +1408,6 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
     if roots_result.changed {
         let _ = state.settings.save(&state.config_path);
         state.start_video_load();
-    }
-    if menu_result.open_grasp_events_requested {
-        state.grasp_dialog.open = true;
-    }
-    if grasp_result.changed {
-        let _ = state.settings.save(&state.config_path);
-        state.reload_grasp_events();
-    }
-    if grasp_result.browse_local_requested && state.dialogs.grasp_file_rx.is_none() {
-        let (tx, rx) = crossbeam_channel::bounded(1);
-        std::thread::spawn(move || {
-            let res = rfd::FileDialog::new().add_filter("CSV files", &["csv"]).pick_file();
-            let _ = tx.send(res);
-        });
-        state.dialogs.grasp_file_rx = Some(rx);
     }
     if roots_result.browse_local_requested && state.dialogs.video_root_rx.is_none() {
         let (tx, rx) = crossbeam_channel::bounded(1);
@@ -1696,21 +1597,16 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
 
 /// Which sides, `(left, right)`, the Grasp pane's "hide unused hands" hides for the open trial: those its CSV row does
 /// not mark as used. Nothing is hidden when the option is off or the trial has no row.
-fn hidden_hands(grasp: &GraspEventSet, seq: &MeshSequence, hide_unused: bool) -> (bool, bool) {
-    let meta = seq.meta();
-    match grasp.row(&meta.subject, &meta.trial) {
+fn hidden_hands(seq: &MeshSequence, hide_unused: bool) -> (bool, bool) {
+    match &seq.meta().grasp_events {
         Some(row) if hide_unused => row.unused_sides(),
         _ => (false, false),
     }
 }
 
-/// The open trial's grasp events placed on its frames; empty without a CSV row or a known video frame rate.
-fn open_trial_marks(grasp: &GraspEventSet, seq: &MeshSequence, video: Option<&FrameStore>) -> Vec<GraspMark> {
-    let meta = seq.meta();
-    match (
-        grasp.row(&meta.subject, &meta.trial),
-        video.and_then(|video| video.fps()),
-    ) {
+/// The open trial's grasp events placed on its frames; empty without events in the export or a known video frame rate.
+fn open_trial_marks(seq: &MeshSequence, video: Option<&FrameStore>) -> Vec<GraspMark> {
+    match (&seq.meta().grasp_events, video.and_then(|video| video.fps())) {
         (Some(row), Some(fps)) => row.marks(fps, seq.frame_count()),
         _ => Vec::new(),
     }

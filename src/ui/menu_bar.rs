@@ -35,7 +35,6 @@ pub struct MenuResult {
     pub export_file_requested: bool,
     pub open_remote_modal_requested: bool,
     pub open_video_roots_requested: bool,
-    pub open_grasp_events_requested: bool,
     pub choose_cache_location_requested: bool,
     pub clear_cache_requested: bool,
     pub disconnect_remote_requested: bool,
@@ -49,7 +48,6 @@ pub fn draw_menu_bar(ui: &Ui, mut state: MenuState) -> MenuResult {
         export_file_requested: false,
         open_remote_modal_requested: false,
         open_video_roots_requested: false,
-        open_grasp_events_requested: false,
         choose_cache_location_requested: false,
         clear_cache_requested: false,
         disconnect_remote_requested: false,
@@ -69,9 +67,6 @@ pub fn draw_menu_bar(ui: &Ui, mut state: MenuState) -> MenuResult {
         ui.menu("File", || {
             if ui.menu_item("Open Export File") {
                 result.export_file_requested = true;
-            }
-            if ui.menu_item("Grasp Events CSVs...") {
-                result.open_grasp_events_requested = true;
             }
             if ui.menu_item("Video Folders...") {
                 result.open_video_roots_requested = true;

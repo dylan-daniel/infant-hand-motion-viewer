@@ -11,10 +11,7 @@ pub use geometry::{
     build_joint_mesh, compute_transform, finger_of, grasp_aperture, hand_length, mano_faces, prepare_hand,
     ray_mesh_intersect, ray_triangle_intersect, track_color,
 };
-pub use grasp_events::{
-    Certainty, GraspEvent, GraspEventKind, GraspEventSet, GraspEventsError, GraspFile, GraspMark, GraspRow, HandGrip,
-    next_event_frame,
-};
+pub use grasp_events::{Certainty, GraspEvent, GraspEventKind, GraspMark, GraspRow, next_event_frame, unused_sides};
 pub use hand_export::{
     HandExportError, HandExportRow, HandVariant, HexportMetadata, MEASURE_COLUMNS, MEASURE_COUNT, ManoParams,
     axis_angle_to_matrix, load_hand_export, parse_hand_export, read_hexport_metadata,

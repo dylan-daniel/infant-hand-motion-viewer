@@ -1,6 +1,6 @@
-use dear_imgui_rs::{Condition, DrawListMut, Id, TreeNodeFlags, Ui, WindowFlags};
+use dear_imgui_rs::{Condition, DrawListMut, Id, Ui, WindowFlags};
 
-use crate::data::{Certainty, GraspEventKind, GraspMark, GraspRow, HandGrip};
+use crate::data::{Certainty, GraspEventKind, GraspMark, GraspRow};
 
 /// Side of the equilateral arrow triangles.
 const ARROW_SIDE: f32 = 6.0;
@@ -106,20 +106,8 @@ pub fn has_event_at(marks: &[GraspMark], frame: usize) -> bool {
     marks.iter().any(|mark| mark.frame == frame)
 }
 
-fn yes_no(value: Option<bool>) -> &'static str {
-    match value {
-        Some(true) => "yes",
-        Some(false) => "no",
-        None => "unknown",
-    }
-}
-
-fn pretty(value: Option<&str>) -> String {
-    value.map_or_else(|| "-".to_string(), |text| text.replace('_', " "))
-}
-
 fn hands_used(row: &GraspRow) -> &'static str {
-    match (row.left.used, row.right.used) {
+    match (row.left_used, row.right_used) {
         (Some(true), Some(true)) => "both hands",
         (Some(true), _) => "left hand",
         (_, Some(true)) => "right hand",
@@ -128,37 +116,14 @@ fn hands_used(row: &GraspRow) -> &'static str {
     }
 }
 
-fn draw_hand(ui: &Ui, label: &str, hand: &HandGrip) {
-    let open = hand.used == Some(true);
-    let flags = if open {
-        TreeNodeFlags::DEFAULT_OPEN
-    } else {
-        TreeNodeFlags::empty()
-    };
-    if !ui.collapsing_header(format!("{label} hand{}", if open { "" } else { " (not used)" }), flags) {
-        return;
-    }
-    if !hand.has_detail() {
-        ui.text_disabled("No grip detail");
-        return;
-    }
-    ui.text(format!("Grip: {}", pretty(hand.grip_type.as_deref())));
-    for (name, value) in hand.digits() {
-        ui.text(format!("{name}: {}", pretty(value)));
-    }
-    ui.text(format!("Palm contact: {}", pretty(hand.palm_contact.as_deref())));
-    ui.text(format!("Thumb opposition: {}", yes_no(hand.thumb_opposition)));
-}
-
 /// What the Grasp pane shows for the open trial.
 pub enum GraspPaneState<'a> {
     NoSequence,
-    NoFiles,
-    NoRow { subject: &'a str, trial: &'a str },
+    NoEvents,
     Row(&'a GraspRow),
 }
 
-/// Draw the dockable "Grasp" window: hands used, object, contact, per-event time and certainty, per-hand grip detail.
+/// Draw the dockable "Grasp" window: hands used and each event's time and certainty.
 pub fn draw_grasp_window(
     ui: &Ui,
     title: &str,
@@ -179,23 +144,12 @@ pub fn draw_grasp_window(
         .build(|| {
             let row = match state {
                 GraspPaneState::NoSequence => return ui.text_disabled("No sequence loaded"),
-                GraspPaneState::NoFiles => {
-                    return ui.text_disabled("No grasp data: add a CSV under File > Grasp Events CSVs");
-                }
-                GraspPaneState::NoRow { subject, trial } => {
-                    return ui.text_disabled(format!("No grasp data: no row for {subject} {trial}"));
+                GraspPaneState::NoEvents => {
+                    return ui.text_disabled("No grasp events in this export");
                 }
                 GraspPaneState::Row(row) => row,
             };
             ui.text(format!("Hand used: {}", hands_used(row)));
-            ui.text(format!(
-                "Object: {} {} {}",
-                pretty(row.object_size.as_deref()),
-                pretty(row.object_color.as_deref()),
-                pretty(row.object_shape.as_deref())
-            ));
-            ui.text(format!("Contact before grip: {}", yes_no(row.contact_before_grip)));
-            ui.text(format!("Contact status: {}", pretty(row.contact_status.as_deref())));
             ui.separator();
             for kind in GraspEventKind::ALL {
                 let event = row.event(kind);
@@ -212,10 +166,5 @@ pub fn draw_grasp_window(
             ui.separator();
             ui.checkbox("Hide unused hands", hide_unused_hands);
             ui.checkbox("Pause at events", pause_at_events);
-            for (label, hand) in [("Left", &row.left), ("Right", &row.right)] {
-                if !*hide_unused_hands || hand.used == Some(true) {
-                    draw_hand(ui, label, hand);
-                }
-            }
         });
 }
