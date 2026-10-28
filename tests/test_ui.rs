@@ -198,6 +198,7 @@ fn tooltip_content_start(show: impl FnOnce(&dear_imgui_rs::Ui, &mut dyn FnMut())
 
     let _serial = IMGUI_TEST_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut context = Context::create();
+    let _ = context.set_ini_filename::<std::path::PathBuf>(None);
     context.io_mut().set_display_size([800.0, 600.0]);
     context.io_mut().set_delta_time(1.0 / 60.0);
     context

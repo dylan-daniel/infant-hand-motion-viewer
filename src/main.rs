@@ -436,6 +436,11 @@ impl ApplicationHandler for AppRunner {
         surface.configure(&gpu.device, &surface_config);
 
         let mut imgui = ImGuiContext::create();
+        let ini_path = self.config_path.with_file_name("imgui.ini");
+        if let Some(dir) = ini_path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = imgui.set_ini_filename(Some(ini_path));
         let config_flags = imgui.io().config_flags() | ConfigFlags::DOCKING_ENABLE;
         imgui.io_mut().set_config_flags(config_flags);
 
