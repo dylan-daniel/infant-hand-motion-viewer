@@ -1,4 +1,6 @@
-use infant_hand_motion_viewer::data::{Certainty, GraspEventKind, GraspRow, HexportMetadata, next_event_frame};
+use infant_hand_motion_viewer::data::{
+    Certainty, GraspEventKind, GraspMark, GraspRow, HexportMetadata, clip_range, next_event_frame,
+};
 use serde_json::json;
 
 fn row(value: serde_json::Value) -> GraspRow {
@@ -88,4 +90,24 @@ fn playback_stops_at_the_first_event_it_reaches() {
     assert_eq!(next_event_frame(&marks, 30, 59), None);
     assert_eq!(next_event_frame(&marks, 90, 199), None);
     assert_eq!(next_event_frame(&[], 0, 10), None);
+}
+
+#[test]
+fn clip_range_pads_e2_and_e4_and_stays_in_the_trial() {
+    let mark = |kind, frame| GraspMark {
+        kind,
+        frame,
+        certainty: None,
+    };
+    let both = [
+        mark(GraspEventKind::ReachOnset, 4),
+        mark(GraspEventKind::GripEstablished, 95),
+    ];
+    assert_eq!(clip_range(&both, 100), (0, 99));
+    let both = [
+        mark(GraspEventKind::ReachOnset, 30),
+        mark(GraspEventKind::GripEstablished, 60),
+    ];
+    assert_eq!(clip_range(&both, 100), (20, 70));
+    assert_eq!(clip_range(&[], 100), (0, 99));
 }

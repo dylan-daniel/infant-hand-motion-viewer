@@ -84,6 +84,19 @@ pub fn next_event_frame(marks: &[GraspMark], from: usize, to: usize) -> Option<u
         .min()
 }
 
+/// Frames kept around the reach onset (E2) and grip established (E4) events when clipping a trial.
+pub const CLIP_MARGIN: usize = 10;
+
+/// The inclusive frame range `E2 - 10 ..= E4 + 10` within a trial of `frame_count` frames. A missing event leaves
+/// that side at the trial's edge.
+pub fn clip_range(marks: &[GraspMark], frame_count: usize) -> (usize, usize) {
+    let last = frame_count.saturating_sub(1);
+    let frame_of = |kind| marks.iter().find(|mark| mark.kind == kind).map(|mark| mark.frame);
+    let start = frame_of(GraspEventKind::ReachOnset).map_or(0, |f| f.saturating_sub(CLIP_MARGIN));
+    let end = frame_of(GraspEventKind::GripEstablished).map_or(last, |f| (f + CLIP_MARGIN).min(last));
+    if start > end { (0, last) } else { (start, end) }
+}
+
 /// The grasp events the pipeline recorded in an export's metadata (`grasp_events`).
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
 #[serde(from = "RawGraspRow")]
