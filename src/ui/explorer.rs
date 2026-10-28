@@ -358,6 +358,14 @@ impl FileExplorer {
         node
     }
 
+    /// The integrity part of an export's `<video_hash>_<integrity>` file stem; the whole stem when it has no `_`.
+    fn integrity_tag(stem: &str) -> &str {
+        match stem.rsplit_once('_') {
+            Some((_, tag)) if !tag.is_empty() => tag,
+            _ => stem,
+        }
+    }
+
     fn group_and_add_hexport_files(node: &mut ExplorerNode, hexport_paths: &[PathBuf]) {
         if hexport_paths.is_empty() {
             return;
@@ -365,8 +373,8 @@ impl FileExplorer {
 
         struct FileEntry {
             path: String,
-            display_name: String,
-            params_tag: String,
+            trial: String,
+            integrity_tag: String,
             quality_score_left: Option<f32>,
             quality_score_right: Option<f32>,
             left_hand_used: Option<bool>,
@@ -381,10 +389,6 @@ impl FileExplorer {
                 .file_stem()
                 .map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            let parts: Vec<&str> = stem.split("__").collect();
-            let fps_tag = if parts.len() >= 2 { parts[1] } else { "" };
-            let params_tag = if parts.len() >= 3 { parts[2] } else { "" };
-
             if let Some(HexportMetadata {
                 subject,
                 trial,
@@ -394,17 +398,12 @@ impl FileExplorer {
                 ..
             }) = read_hexport_metadata(path)
             {
-                let display_name = if !fps_tag.is_empty() {
-                    format!("{trial}_{fps_tag}")
-                } else {
-                    trial.clone()
-                };
                 subject_groups.entry(subject).or_default().push(FileEntry {
                     left_hand_used: grasp_events.as_ref().and_then(|row| row.left_used),
                     right_hand_used: grasp_events.as_ref().and_then(|row| row.right_used),
                     path: path.to_string_lossy().into_owned(),
-                    display_name,
-                    params_tag: params_tag.to_string(),
+                    trial,
+                    integrity_tag: Self::integrity_tag(&stem).to_string(),
                     quality_score_left,
                     quality_score_right,
                 });
@@ -426,18 +425,17 @@ impl FileExplorer {
         for (subject, entries) in subject_groups {
             let mut name_counts = std::collections::HashMap::new();
             for entry in &entries {
-                *name_counts.entry(entry.display_name.clone()).or_insert(0) += 1;
+                *name_counts.entry(entry.trial.clone()).or_insert(0) += 1;
             }
 
             let mut subject_children = Vec::new();
             for entry in entries {
-                let name =
-                    if name_counts.get(&entry.display_name).copied().unwrap_or(0) > 1 && !entry.params_tag.is_empty() {
-                        let short_p = &entry.params_tag[..entry.params_tag.len().min(6)];
-                        format!("{} ({short_p})", entry.display_name)
-                    } else {
-                        entry.display_name
-                    };
+                let name = if name_counts.get(&entry.trial).copied().unwrap_or(0) > 1 {
+                    let short_tag: String = entry.integrity_tag.chars().take(6).collect();
+                    format!("{} ({short_tag})", entry.trial)
+                } else {
+                    entry.trial
+                };
 
                 subject_children.push(ExplorerNode {
                     name,

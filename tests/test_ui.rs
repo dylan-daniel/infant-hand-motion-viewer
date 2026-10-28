@@ -67,11 +67,11 @@ fn test_file_explorer_local_scan() {
     let sub_dir = root.join("session_a");
     fs::create_dir(&sub_dir).unwrap();
 
-    let f1_path = sub_dir.join("data__30fps__p1.hexport");
+    let f1_path = sub_dir.join("hash1_p1.hexport");
     let mut f1 = File::create(&f1_path).unwrap();
     f1.write_all(&hex_bytes_1).unwrap();
 
-    let f2_path = sub_dir.join("data__30fps__p2.hexport");
+    let f2_path = sub_dir.join("hash2_p2.hexport");
     let mut f2 = File::create(&f2_path).unwrap();
     f2.write_all(&hex_bytes_2).unwrap();
 
@@ -358,12 +358,12 @@ fn test_scan_root_attaches_quality_score_to_trial_files_only() {
     let dir = TempDirGuard::new("quality_scan");
     let root = dir.path();
     fs::write(
-        root.join("a__30fps__p1.hexport"),
+        root.join("hash1_p1.hexport"),
         common::generate_synthetic_hexport_with_scores("S1", "T1", Some(0.8), None),
     )
     .unwrap();
     fs::write(
-        root.join("b__30fps__p2.hexport"),
+        root.join("hash2_p2.hexport"),
         common::generate_synthetic_hexport_with_meta(
             "S1",
             "T2",
@@ -385,7 +385,25 @@ fn test_scan_root_attaches_quality_score_to_trial_files_only() {
         .collect();
 
     assert_eq!((subject.quality_score_left, subject.quality_score_right), (None, None));
-    assert_eq!(scores, vec![("T1_30fps", Some(0.8), None), ("T2_30fps", None, None)]);
+    assert_eq!(scores, vec![("T1", Some(0.8), None), ("T2", None, None)]);
+}
+
+#[test]
+fn test_explorer_labels_trials_by_name_and_adds_the_integrity_only_for_duplicates() {
+    let dir = TempDirGuard::new("duplicate_labels");
+    let root = dir.path();
+    for (file, trial) in [
+        ("hash1_aaaaaa1111.hexport", "T1"),
+        ("hash2_bbbbbb2222.hexport", "T1"),
+        ("hash3_cccccc3333.hexport", "T2"),
+    ] {
+        fs::write(root.join(file), common::generate_synthetic_hexport("S1", trial)).unwrap();
+    }
+
+    let tree = FileExplorer::scan_root(root);
+    let mut names: Vec<_> = tree.children[0].children.iter().map(|c| c.name.clone()).collect();
+    names.sort();
+    assert_eq!(names, ["T1 (aaaaaa)", "T1 (bbbbbb)", "T2"]);
 }
 
 mod trial_filter {
@@ -418,8 +436,8 @@ mod trial_filter {
         assert!(shown("LK26, BF65", "BF65", "T1"));
         assert!(shown("LK26, BF65", "LK26", "T1"));
         assert!(!shown("LK26, BF65", "AE45", "T1"));
-        assert!(shown("LK26 t1", "LK26", "T1_native"));
-        assert!(!shown("LK26 t2", "LK26", "T1_native"));
+        assert!(shown("LK26 t1", "LK26", "T1"));
+        assert!(!shown("LK26 t2", "LK26", "T1"));
         assert!(shown("LK26 t2, BF65", "BF65", "T9"));
     }
 

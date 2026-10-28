@@ -84,10 +84,9 @@ def _disambiguate_names(files_list):
     for f in files_list:
         seen[f["name"]] = seen.get(f["name"], 0) + 1
     for f in files_list:
-        if seen[f["name"]] > 1 and f.get("params"):
-            short_p = f["params"][:6]
-            f["name"] = f"{f['name']} ({short_p})"
-        f.pop("params", None)
+        if seen[f["name"]] > 1:
+            f["name"] = f"{f['name']} ({f['integrity'][:6]})"
+        f.pop("integrity", None)
 
 
 def scan_tree(root_path_str: str):
@@ -125,18 +124,15 @@ def scan_tree(root_path_str: str):
             for entry in hexport_entries:
                 subject, trial, score_left, score_right, left_used, right_used = read_hexport_metadata(entry.path)
                 stem = Path(entry.name).stem
-                parts = stem.split("__")
-                fps_tag = parts[1] if len(parts) >= 2 else ""
-                params_tag = parts[2] if len(parts) >= 3 else ""
+                integrity_tag = stem.rsplit("_", 1)[-1] or stem
 
                 if subject and trial:
-                    display_name = f"{trial}_{fps_tag}" if fps_tag else trial
                     subject_groups.setdefault(subject, []).append({
-                        "name": display_name,
+                        "name": trial,
                         "path": entry.path,
                         "is_file": True,
                         "children": [],
-                        "params": params_tag,
+                        "integrity": integrity_tag,
                         "quality_score_left": score_left,
                         "quality_score_right": score_right,
                         "left_hand_used": left_used,

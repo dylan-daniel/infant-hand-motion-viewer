@@ -108,7 +108,7 @@ fn test_remote_client_local_daemon_e2e() {
     let video_hash = sha256_hex(&video_bytes);
     isolate_hash_cache();
 
-    let hexport_path = trial_dir.join("motion__30fps__hash.hexport");
+    let hexport_path = trial_dir.join("motion_hash.hexport");
     let synthetic_bytes = common::generate_synthetic_hexport_with_meta(
         "subject_a",
         "trial_01",
