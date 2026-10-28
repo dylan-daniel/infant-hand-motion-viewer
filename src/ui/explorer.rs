@@ -109,6 +109,10 @@ pub struct FileExplorer {
     filter_text: String,
     /// Whether the filter was active last frame, so clearing it can put the user's own open folders back.
     filter_was_active: bool,
+    /// Filter text of the last frame; a change reopens every folder the user collapsed during the search.
+    last_filter_text: String,
+    /// Folders open or closed during the current search, kept apart from `open_state` so clearing the filter restores it.
+    search_open: HashMap<String, bool>,
     focus_filter: bool,
 
     in_flight: Arc<AtomicUsize>,
@@ -133,6 +137,8 @@ impl FileExplorer {
             vertical_scrollbar: false,
             filter_text: String::new(),
             filter_was_active: false,
+            last_filter_text: String::new(),
+            search_open: HashMap::new(),
             focus_filter: false,
 
             in_flight: Arc::new(AtomicUsize::new(0)),
@@ -522,6 +528,10 @@ impl FileExplorer {
                 ui.text_disabled("No trials match the filter.");
             }
             let visible = filter_active.then_some(&visible);
+            if !filter_active || self.filter_text != self.last_filter_text {
+                self.search_open.clear();
+            }
+            self.last_filter_text.clone_from(&self.filter_text);
 
             if let Some(node) = self.root_node.clone().filter(|_| !nothing_matches) {
                 let flags = TableFlags::ROW_BG | TableFlags::SCROLL_X | TableFlags::SCROLL_Y;
@@ -546,6 +556,7 @@ impl FileExplorer {
                         is_remote,
                         result: &mut result,
                         open_state: &mut self.open_state,
+                        search_open: &mut self.search_open,
                         selected_path: &self.selected_path,
                         content_right: 0.0,
                         visible,
@@ -770,10 +781,13 @@ impl FileExplorer {
         } else {
             let filtering = draw.visible.is_some();
             let saved_open = draw.open_state.get(&node.path).copied().unwrap_or(depth == 0);
-            // A filter opens every folder with a match without touching the user's own state, which comes back
-            // (forced once) when the filter is cleared.
+            // A filter opens every folder with a match, and the user can collapse them again. That state is kept apart
+            // from the user's own, which comes back (forced once) when the filter is cleared.
             let (should_open, condition) = if filtering {
-                (true, Condition::Always)
+                (
+                    draw.search_open.get(&node.path).copied().unwrap_or(true),
+                    Condition::Always,
+                )
             } else if draw.restoring_open {
                 (saved_open, Condition::Always)
             } else {
@@ -787,7 +801,9 @@ impl FileExplorer {
                 .span_full_width(true)
                 .push();
             let open = node_token.is_some();
-            if !filtering {
+            if filtering {
+                draw.search_open.insert(node.path.clone(), open);
+            } else {
                 draw.open_state.insert(node.path.clone(), open);
             }
             let icon = if open {
@@ -873,6 +889,8 @@ struct TreeDraw<'a> {
     is_remote: bool,
     result: &'a mut ExplorerResult,
     open_state: &'a mut HashMap<String, bool>,
+    /// Open state of folders during a filter; folders without an entry are open.
+    search_open: &'a mut HashMap<String, bool>,
     selected_path: &'a str,
     content_right: f32,
     /// Paths to show while a filter is active; `None` shows everything.
