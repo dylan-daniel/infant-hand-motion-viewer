@@ -1633,9 +1633,9 @@ fn hidden_hands(seq: &MeshSequence, hide_unused: bool) -> (bool, bool) {
 }
 
 /// The open trial's grasp events placed on its frames. Uses the video's frame rate once it is probed and the
-/// export's own `fps_key` until then, so the marks do not wait for the video; empty without events or a rate.
+/// export's own `fps` until then, so the marks do not wait for the video; empty without events or a rate.
 fn open_trial_marks(seq: &MeshSequence, video: Option<&FrameStore>) -> Vec<GraspMark> {
-    let fps = video.and_then(|video| video.fps()).or_else(|| seq.meta().nominal_fps());
+    let fps = video.and_then(|video| video.fps()).or(seq.meta().fps);
     match (&seq.meta().grasp_events, fps) {
         (Some(row), Some(fps)) => row.marks(fps, seq.frame_count()),
         _ => Vec::new(),

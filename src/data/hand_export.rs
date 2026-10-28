@@ -467,8 +467,9 @@ pub struct HexportMetadata {
     /// SHA-256 of the source video; identifies it wherever it lives.
     #[serde(default)]
     pub video_hash: String,
-    #[serde(default)]
-    pub fps_key: Option<String>,
+    /// Frame rate the export's frames were extracted at; None when the pipeline did not know it.
+    #[serde(default, deserialize_with = "positive_fps")]
+    pub fps: Option<f64>,
     /// Cheap pre-filters when searching for the video; None when the pipeline did not know them.
     #[serde(default)]
     pub video_basename: Option<String>,
@@ -479,19 +480,8 @@ pub struct HexportMetadata {
     pub grasp_events: Option<GraspRow>,
 }
 
-impl HexportMetadata {
-    /// Frame rate the export was sampled at, read from `fps_key` (e.g. "30fps").
-    pub fn nominal_fps(&self) -> Option<f64> {
-        let fps = self
-            .fps_key
-            .as_deref()?
-            .trim()
-            .trim_end_matches("fps")
-            .trim()
-            .parse::<f64>()
-            .ok()?;
-        (fps.is_finite() && fps > 0.0).then_some(fps)
-    }
+fn positive_fps<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option<f64>, D::Error> {
+    Ok(Option::<f64>::deserialize(de)?.filter(|fps| fps.is_finite() && *fps > 0.0))
 }
 
 fn finite_score<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option<f32>, D::Error> {
