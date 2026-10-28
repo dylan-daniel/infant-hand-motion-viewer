@@ -124,12 +124,14 @@ pub enum GraspPaneState<'a> {
 }
 
 /// Draw the dockable "Grasp" window: hands used and each event's time and certainty.
+#[allow(clippy::too_many_arguments)]
 pub fn draw_grasp_window(
     ui: &Ui,
     title: &str,
     state: GraspPaneState<'_>,
     hide_unused_hands: &mut bool,
     pause_at_events: &mut bool,
+    clip_to_events: &mut bool,
     open: bool,
     dock_id: Option<Id>,
 ) {
@@ -166,5 +168,6 @@ pub fn draw_grasp_window(
             ui.separator();
             ui.checkbox("Hide unused hands", hide_unused_hands);
             ui.checkbox("Pause at events", pause_at_events);
+            ui.checkbox("Clip to events (E2 - 10 to E4 + 10 frames)", clip_to_events);
         });
 }

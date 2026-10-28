@@ -46,6 +46,14 @@ impl TimeView {
         }
     }
 
+    /// Frames `start..=end`.
+    pub fn between(start: usize, end: usize) -> Self {
+        Self {
+            start: start as f32,
+            end: end as f32,
+        }
+    }
+
     pub fn span(&self) -> f32 {
         self.end - self.start
     }
@@ -56,7 +64,16 @@ impl TimeView {
 
     /// Scales the span by `factor` (below 1 zooms in) keeping `anchor` where it is on screen.
     pub fn zoom(&mut self, factor: f32, anchor: f32, frame_count: usize) {
-        let full = Self::full(frame_count);
+        self.zoom_within(factor, anchor, Self::full(frame_count));
+    }
+
+    /// Moves the view by `delta` frames, stopping at the ends of the sequence.
+    pub fn shift(&mut self, delta: f32, frame_count: usize) {
+        self.shift_within(delta, Self::full(frame_count));
+    }
+
+    /// `zoom` limited to `full`.
+    pub fn zoom_within(&mut self, factor: f32, anchor: f32, full: Self) {
         let min_span = MIN_VISIBLE_FRAMES.min(full.span());
         let span = (self.span() * factor).clamp(min_span, full.span());
         let t = if self.span() > 0.0 {
@@ -66,14 +83,13 @@ impl TimeView {
         };
         self.start = anchor - t * span;
         self.end = self.start + span;
-        self.shift(0.0, frame_count);
+        self.shift_within(0.0, full);
     }
 
-    /// Moves the view by `delta` frames, stopping at the ends of the sequence.
-    pub fn shift(&mut self, delta: f32, frame_count: usize) {
-        let full = Self::full(frame_count);
+    /// `shift` limited to `full`.
+    pub fn shift_within(&mut self, delta: f32, full: Self) {
         let span = self.span();
-        self.start = (self.start + delta).clamp(0.0, (full.end - span).max(0.0));
+        self.start = (self.start + delta).clamp(full.start, (full.end - span).max(full.start));
         self.end = self.start + span;
     }
 
@@ -101,6 +117,7 @@ pub struct MeasuresView {
     series: Vec<Vec<MeasureSeries>>,
     has_data: bool,
     time_view: Option<TimeView>,
+    range: Option<(usize, usize)>,
 }
 
 impl MeasuresView {
@@ -199,6 +216,7 @@ pub fn draw_measures_window(
     current_frame: usize,
     grasp_marks: &[GraspMark],
     hidden_hands: (bool, bool),
+    range: (usize, usize),
     dock_id: Option<Id>,
 ) -> Option<usize> {
     if !open {
@@ -220,12 +238,16 @@ pub fn draw_measures_window(
                 ui.text_disabled("no measure data in this export");
                 return;
             }
-            let frame_count = sequence.frame_count();
+            if view.range != Some(range) {
+                view.range = Some(range);
+                view.time_view = None;
+            }
+            let full = TimeView::between(range.0, range.1);
             let MeasuresView { series, time_view, .. } = view;
-            let time = time_view.get_or_insert_with(|| TimeView::full(frame_count));
+            let time = time_view.get_or_insert(full);
             ui.child_window("MeasureScroll").size([0.0, 0.0]).build(ui, || {
                 draw_legend(ui, &series[0]);
-                if !time.is_full(frame_count) {
+                if *time != full {
                     ui.text_disabled(format!(
                         "Frames {:.0}-{:.0} (double-click a plot to reset)",
                         time.start, time.end
@@ -236,7 +258,7 @@ pub fn draw_measures_window(
                     let plot = Plot {
                         measure: m,
                         series: list,
-                        frame_count,
+                        range,
                         current_frame,
                         grasp_marks,
                         height,
@@ -283,7 +305,7 @@ fn draw_legend(ui: &Ui, series: &[MeasureSeries]) {
 struct Plot<'a> {
     measure: usize,
     series: &'a [MeasureSeries],
-    frame_count: usize,
+    range: (usize, usize),
     current_frame: usize,
     grasp_marks: &'a [GraspMark],
     height: f32,
@@ -293,11 +315,12 @@ fn draw_plot(ui: &Ui, plot: &Plot, time: &mut TimeView) -> Option<usize> {
     let Plot {
         measure,
         series,
-        frame_count,
+        range,
         current_frame,
         grasp_marks,
         height,
     } = *plot;
+    let full = TimeView::between(range.0, range.1);
     let _id = ui.push_id(measure as i32);
     ui.text(MEASURE_TITLES[measure]);
     let width = ui.content_region_avail()[0].max(50.0);
@@ -314,19 +337,18 @@ fn draw_plot(ui: &Ui, plot: &Plot, time: &mut TimeView) -> Option<usize> {
         let io = ui.io();
         let (wheel, wheel_h) = (io.mouse_wheel(), io.mouse_wheel_h());
         if io.key_ctrl() && io.key_shift() && (wheel != 0.0 || wheel_h != 0.0) {
-            time.shift((wheel + wheel_h) * -time.span() * PAN_STEP, frame_count);
+            time.shift_within((wheel + wheel_h) * -time.span() * PAN_STEP, full);
         } else if io.key_ctrl() && wheel != 0.0 {
             let anchor = time.frame_at(mouse_x, x_min, x_max);
-            time.zoom(ZOOM_STEP.powf(wheel), anchor, frame_count);
+            time.zoom_within(ZOOM_STEP.powf(wheel), anchor, full);
         }
         if ui.is_mouse_double_clicked(MouseButton::Left) {
-            *time = TimeView::full(frame_count);
+            *time = full;
         }
     }
     let time = *time;
     let to_x = |frame: usize| time.x_of(frame as f32, x_min, x_max);
-    let to_frame =
-        |x: f32| (time.frame_at(x, x_min, x_max).round().max(0.0) as usize).min(frame_count.saturating_sub(1));
+    let to_frame = |x: f32| (time.frame_at(x, x_min, x_max).round().max(range.0 as f32) as usize).min(range.1);
 
     let draw_list = ui.get_window_draw_list();
     draw_list

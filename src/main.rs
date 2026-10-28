@@ -22,7 +22,7 @@ use dear_imgui_winit::{HiDpiMode, WinitPlatform};
 use infant_hand_motion_viewer::assets;
 use infant_hand_motion_viewer::config::Config;
 use infant_hand_motion_viewer::data::{
-    GraspMark, HandData, MeshSequence, Transform, compute_transform, next_event_frame, reference_depth,
+    GraspMark, HandData, MeshSequence, Transform, clip_range, compute_transform, next_event_frame, reference_depth,
 };
 use infant_hand_motion_viewer::graphics::{
     Camera, FrameGpu, Framebuffer, FreeCamera, Gpu, HandOverlay, ImageTexture, OrbitCamera, Renderer, SceneRender,
@@ -171,6 +171,22 @@ struct AppState {
 }
 
 impl AppState {
+    /// The inclusive frames playback, scrubbing and the plots cover: the whole trial, or around E2..E4 when clipped.
+    fn frame_range(&self) -> (usize, usize) {
+        let Some(seq) = &self.sequence else { return (0, 0) };
+        let last = seq.frame_count().saturating_sub(1);
+        if !self.settings.clip_to_events {
+            return (0, last);
+        }
+        clip_range(&open_trial_marks(seq, self.video.as_deref()), seq.frame_count())
+    }
+
+    /// Moves the current frame into the clip range.
+    fn clamp_to_range(&mut self) {
+        let (first, last) = self.frame_range();
+        self.current_frame = self.current_frame.clamp(first, last);
+    }
+
     /// Starts looking up and decoding the open trial's video, from the remote when the trial came from there.
     fn start_video_load(&mut self) {
         if let Some(video) = self.video.take() {
@@ -706,12 +722,10 @@ impl ApplicationHandler for AppRunner {
                             state.active_camera_mut().reset();
                         }
                         KeyCode::Home if !want_text && !modal_open => {
-                            state.current_frame = 0;
+                            state.current_frame = state.frame_range().0;
                         }
-                        KeyCode::End if !want_text && !modal_open => {
-                            if let Some(ref seq) = state.sequence {
-                                state.current_frame = seq.frame_count().saturating_sub(1);
-                            }
+                        KeyCode::End if !want_text && !modal_open && state.sequence.is_some() => {
+                            state.current_frame = state.frame_range().1;
                         }
                         _ => {}
                     }
@@ -975,6 +989,8 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             scrub_dir -= 1;
         }
 
+        state.clamp_to_range();
+        let (range_first, range_last) = state.frame_range();
         if let Some(ref seq) = state.sequence {
             if !state.playing && scrub_dir != 0 {
                 let mut step_now = false;
@@ -988,12 +1004,9 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
                         state.scrub_timer = SCRUB_REPEAT_INTERVAL;
                     }
                 }
-                if step_now {
-                    let total = seq.frame_count();
-                    if total > 0 {
-                        let next = (state.current_frame as i32 + scrub_dir).clamp(0, total as i32 - 1);
-                        state.current_frame = next as usize;
-                    }
+                if step_now && seq.frame_count() > 0 {
+                    let next = (state.current_frame as i32 + scrub_dir).clamp(range_first as i32, range_last as i32);
+                    state.current_frame = next as usize;
                 }
             } else {
                 state.scrub_timer = -1.0;
@@ -1002,6 +1015,8 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
     }
 
     // Playback progression
+    state.clamp_to_range();
+    let (range_first, range_last) = state.frame_range();
     if let Some(ref seq) = state.sequence {
         let frame_count = seq.frame_count();
         if state.playing && !state.scrubbing && frame_count > 0 {
@@ -1015,14 +1030,15 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
                     .pause_at_events
                     .then(|| {
                         let marks = open_trial_marks(seq, state.video.as_deref());
-                        next_event_frame(&marks, from, (from + step).min(frame_count - 1))
+                        next_event_frame(&marks, from, (from + step).min(range_last))
                     })
                     .flatten();
                 if let Some(frame) = stop {
                     state.current_frame = frame;
                     state.playing = false;
                 } else {
-                    state.current_frame = (from + step) % frame_count;
+                    let len = range_last - range_first + 1;
+                    state.current_frame = range_first + (from - range_first + step) % len;
                 }
             }
         } else {
@@ -1153,6 +1169,8 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         remote_connected: state.remote_client.is_connected(),
     };
 
+    state.clamp_to_range();
+    let frame_range = state.frame_range();
     let grasp_row = state.sequence.as_ref().and_then(|seq| seq.meta().grasp_events.as_ref());
     let grasp_marks = match &state.sequence {
         Some(seq) => open_trial_marks(seq, state.video.as_deref()),
@@ -1204,6 +1222,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             has_sequence,
             current_frame: state.current_frame,
             frame_count,
+            range: frame_range,
             playing: state.playing,
             speed: state.playback_speed,
             show_transport: false,
@@ -1298,6 +1317,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             state.current_frame,
             &grasp_marks,
             state.applied_hidden_hands,
+            frame_range,
             None,
         );
 
@@ -1312,6 +1332,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             grasp_state,
             &mut state.settings.hide_unused_hands,
             &mut state.settings.pause_at_events,
+            &mut state.settings.clip_to_events,
             state.settings.show_grasp,
             None,
         );

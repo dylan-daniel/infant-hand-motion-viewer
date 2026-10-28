@@ -112,6 +112,9 @@ pub struct Config {
     /// Playback stops on each grasp event it reaches.
     #[serde(default)]
     pub pause_at_events: bool,
+    /// Limit the trial to 10 frames either side of the reach onset and grip established events.
+    #[serde(default)]
+    pub clip_to_events: bool,
     #[serde(default = "default_true")]
     pub free_camera: bool,
     #[serde(default)]
@@ -193,6 +196,7 @@ impl Default for Config {
             remote_video_roots: Vec::new(),
             hide_unused_hands: false,
             pause_at_events: false,
+            clip_to_events: false,
             free_camera: default_true(),
             active_pane: 0,
             flag_layers_enabled: default_flag_layers(),

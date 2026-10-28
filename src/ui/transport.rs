@@ -134,6 +134,8 @@ pub struct Transport<'a> {
     pub has_sequence: bool,
     pub current_frame: usize,
     pub frame_count: usize,
+    /// Inclusive frames the scrubber covers.
+    pub range: (usize, usize),
     pub playing: bool,
     pub speed: f32,
     pub show_transport: bool,
@@ -150,6 +152,7 @@ impl Default for Transport<'_> {
             has_sequence: false,
             current_frame: 0,
             frame_count: 0,
+            range: (0, 0),
             playing: false,
             speed: 1.0,
             show_transport: false,
@@ -250,12 +253,14 @@ impl SliderGeometry {
 }
 
 /// Draws one filled rect per contiguous run of frames where flag layer is active.
+#[allow(clippy::too_many_arguments)]
 pub fn draw_flag_overlay(
     draw_list: &dear_imgui_rs::DrawListMut<'_>,
     geometry: &SliderGeometry,
     band_top: f32,
     band_bottom: f32,
     sequence: &MeshSequence,
+    first_frame: usize,
     per_track_coloring: bool,
     flag_layers_enabled: [bool; FLAG_LAYER_COUNT],
 ) {
@@ -273,7 +278,7 @@ pub fn draw_flag_overlay(
         }
         let mut run_start: Option<usize> = None;
         for frame in 0..frame_count {
-            let active = sequence.is_flagged(frame, layer, per_track_coloring);
+            let active = sequence.is_flagged(first_frame + frame, layer, per_track_coloring);
             if active && run_start.is_none() {
                 run_start = Some(frame);
             }
@@ -302,9 +307,10 @@ fn draw_frame_slider(
     ui: &Ui,
     draw_list: &dear_imgui_rs::DrawListMut<'_>,
     current_frame: &mut usize,
-    frame_count: usize,
     transport: &Transport,
 ) -> bool {
+    let (first, last) = transport.range;
+    let frame_count = last - first + 1;
     let height = ui.frame_height();
     let pos = ui.cursor_screen_pos();
     let width = ui.calc_item_width().max(1.0);
@@ -326,7 +332,7 @@ fn draw_frame_slider(
     let grab_sz = geometry.grab_size();
 
     if active && max_frame > 0 {
-        *current_frame = geometry.frame_at(ui.io().mouse_pos()[0]);
+        *current_frame = first + geometry.frame_at(ui.io().mouse_pos()[0]);
     }
 
     let track_color = if active {
@@ -350,22 +356,27 @@ fn draw_frame_slider(
             slider_min[1],
             slider_max[1],
             seq,
+            first,
             transport.per_track_coloring,
             transport.flag_layers_enabled,
         );
     }
 
-    for mark in transport.grasp_marks {
+    for mark in transport
+        .grasp_marks
+        .iter()
+        .filter(|m| (first..=last).contains(&m.frame))
+    {
         draw_arrows(
             draw_list,
-            geometry.center_x(mark.frame),
+            geometry.center_x(mark.frame - first),
             slider_min[1],
             slider_max[1],
             mark,
         );
     }
 
-    let grab_center_x = geometry.center_x(*current_frame);
+    let grab_center_x = geometry.center_x(current_frame.saturating_sub(first));
     let grab_min = [grab_center_x - grab_sz * 0.5, slider_min[1] + grab_padding];
     let grab_max = [grab_center_x + grab_sz * 0.5, slider_max[1] - grab_padding];
     let grab_color = if active {
@@ -381,7 +392,7 @@ fn draw_frame_slider(
         .build();
 
     if hovered && transport.sequence.is_some() && max_frame > 0 {
-        let hover_frame = geometry.frame_at(ui.io().mouse_pos()[0]);
+        let hover_frame = first + geometry.frame_at(ui.io().mouse_pos()[0]);
 
         if let Some(seq) = transport.sequence {
             let mut active_layers = Vec::new();
@@ -486,13 +497,7 @@ pub fn draw_transport_bar(
     let speed_button_width = speed_text_width + ui.clone_style().frame_padding()[0] * 2.0;
     let slider_width = (width - 8.0 - button_width - spacing - speed_button_width - spacing - 8.0).max(1.0);
     ui.set_next_item_width(slider_width);
-    let scrubbing = draw_frame_slider(
-        ui,
-        &draw_list,
-        &mut state.current_frame,
-        transport.frame_count,
-        transport,
-    );
+    let scrubbing = draw_frame_slider(ui, &draw_list, &mut state.current_frame, transport);
     state.scrubbing = scrubbing;
 
     // Speed button: cycles through the preset speeds
