@@ -154,3 +154,15 @@ fn test_real_per_hand_score_export_loads_when_present() {
     assert_eq!(metas.iter().filter(|m| m.quality_score_left.is_none()).count(), 1);
     assert_eq!(metas.iter().filter(|m| m.quality_score_right.is_none()).count(), 10);
 }
+
+#[test]
+fn nominal_fps_reads_the_fps_key() {
+    let meta = |key: Option<&str>| infant_hand_motion_viewer::data::HexportMetadata {
+        fps_key: key.map(str::to_string),
+        ..Default::default()
+    };
+    assert_eq!(meta(Some("30fps")).nominal_fps(), Some(30.0));
+    assert_eq!(meta(Some("29.97fps")).nominal_fps(), Some(29.97));
+    assert_eq!(meta(Some("fast")).nominal_fps(), None);
+    assert_eq!(meta(None).nominal_fps(), None);
+}

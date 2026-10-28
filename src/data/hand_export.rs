@@ -479,6 +479,21 @@ pub struct HexportMetadata {
     pub grasp_events: Option<GraspRow>,
 }
 
+impl HexportMetadata {
+    /// Frame rate the export was sampled at, read from `fps_key` (e.g. "30fps").
+    pub fn nominal_fps(&self) -> Option<f64> {
+        let fps = self
+            .fps_key
+            .as_deref()?
+            .trim()
+            .trim_end_matches("fps")
+            .trim()
+            .parse::<f64>()
+            .ok()?;
+        (fps.is_finite() && fps > 0.0).then_some(fps)
+    }
+}
+
 fn finite_score<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option<f32>, D::Error> {
     Ok(Option::<f32>::deserialize(de)?.filter(|score| score.is_finite()))
 }
