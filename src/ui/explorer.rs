@@ -512,7 +512,7 @@ impl FileExplorer {
             }
             ui.set_next_item_width(-1.0);
             ui.input_text("##trial_filter", &mut self.filter_text)
-                .hint("Filter trials (e.g. B, LK26, !BF65)")
+                .hint("Filter folders/trials (e.g. B, LK26, !BF65)")
                 .flags(InputTextFlags::ESCAPE_CLEARS_ALL)
                 .build();
             ui.separator();
@@ -521,7 +521,7 @@ impl FileExplorer {
 
             let mut visible = HashSet::new();
             if filter_active && let Some(root) = &self.root_node {
-                Self::collect_visible(root, "", &filter, &mut visible);
+                Self::collect_visible(root, &mut Vec::new(), true, &filter, &mut visible);
             }
             let nothing_matches = filter_active && self.root_node.is_some() && visible.is_empty();
             if nothing_matches {
@@ -590,16 +590,24 @@ impl FileExplorer {
     /// Records the paths of trials matching `filter` and of the folders above them; true if `node` is one of them.
     fn collect_visible(
         node: &ExplorerNode,
-        parent_name: &str,
+        folders: &mut Vec<String>,
+        is_root: bool,
         filter: &TrialFilter,
         out: &mut HashSet<String>,
     ) -> bool {
         let shown = if node.is_file {
-            filter.matches(parent_name, &node.name)
+            filter.matches_path(folders, &node.name)
         } else {
-            node.children.iter().fold(false, |any, child| {
-                Self::collect_visible(child, &node.name, filter, out) | any
-            })
+            if !is_root {
+                folders.push(node.name.clone());
+            }
+            let any = node.children.iter().fold(false, |any, child| {
+                Self::collect_visible(child, folders, false, filter, out) | any
+            });
+            if !is_root {
+                folders.pop();
+            }
+            any
         };
         if shown {
             out.insert(node.path.clone());

@@ -433,6 +433,15 @@ mod trial_filter {
     }
 
     #[test]
+    fn terms_also_match_any_folder_above_the_trial() {
+        let filter = |q: &str| TrialFilter::parse(q).matches_path(&["Session2", "BF65"], "T1");
+        assert!(filter("session2"));
+        assert!(filter("session2 bf65 t1"));
+        assert!(!filter("session3"));
+        assert!(!filter("!session2"));
+    }
+
+    #[test]
     fn commas_are_or_and_spaces_are_and() {
         assert!(shown("LK26, BF65", "BF65", "T1"));
         assert!(shown("LK26, BF65", "LK26", "T1"));
