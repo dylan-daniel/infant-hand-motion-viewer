@@ -36,17 +36,24 @@ impl TrialRow {
         (self.left.filter(|_| left_used), self.right.filter(|_| right_used))
     }
 
-    /// The worst score among the used hands; `None` when no used hand is scored.
-    pub fn used_score(&self) -> Option<f32> {
-        let (left, right) = self.shown_scores(true);
+    /// The worst score among the hands the events mark as used and `"L"`, `"R"` or `"L+R"` for the hands it came from;
+    /// `None` when there is no event data or no used hand is scored.
+    pub fn used_summary(&self) -> Option<(f32, &'static str)> {
+        let left = self.left.filter(|_| self.left_used == Some(true));
+        let right = self.right.filter(|_| self.right_used == Some(true));
         match (left, right) {
-            (Some(left), Some(right)) => Some(left.min(right)),
-            (left, right) => left.or(right),
+            (Some(left), Some(right)) => Some((left.min(right), "L+R")),
+            (Some(left), None) => Some((left, "L")),
+            (None, Some(right)) => Some((right, "R")),
+            (None, None) => None,
         }
+    }
+
+    pub fn used_score(&self) -> Option<f32> {
+        self.used_summary().map(|(score, _)| score)
     }
 }
 
-/// The trials of one export folder.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FolderTable {
     pub name: String,
@@ -266,12 +273,20 @@ pub fn draw_trial_table_window(
                     ui.table_next_column();
                     ui.text(&row.trial);
                     let (left, right) = row.shown_scores(hide_unused);
-                    for score in [left, right, row.used_score()] {
+                    for score in [left, right] {
                         ui.table_next_column();
                         match score {
                             Some(value) => ui.text_colored(score_color(value), format_quality_score(Some(value))),
                             None => ui.text_disabled("-"),
                         }
+                    }
+                    ui.table_next_column();
+                    match row.used_summary() {
+                        Some((value, hands)) => ui.text_colored(
+                            score_color(value),
+                            format!("{} ({hands})", format_quality_score(Some(value))),
+                        ),
+                        None => ui.text_disabled("-"),
                     }
                 }
             }

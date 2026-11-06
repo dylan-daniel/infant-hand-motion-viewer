@@ -579,15 +579,17 @@ mod trial_table {
     }
 
     #[test]
-    fn the_used_score_is_the_worst_score_of_the_used_hands() {
-        let both = used_row(Some(0.9), Some(0.4), Some(true), Some(true));
-        assert_eq!(both.used_score(), Some(0.4));
-        let left_only = used_row(Some(0.9), Some(0.4), Some(true), Some(false));
-        assert_eq!(left_only.used_score(), Some(0.9));
-        let unflagged = used_row(Some(0.9), Some(0.4), None, None);
-        assert_eq!(unflagged.used_score(), Some(0.4));
-        let neither = used_row(Some(0.9), Some(0.4), Some(false), Some(false));
-        assert_eq!(neither.used_score(), None);
+    fn the_used_summary_is_the_worst_used_score_with_its_hands() {
+        let summary = |l, r, lu, ru| used_row(l, r, lu, ru).used_summary();
+        assert_eq!(
+            summary(Some(0.9), Some(0.4), Some(true), Some(true)),
+            Some((0.4, "L+R"))
+        );
+        assert_eq!(summary(Some(0.9), Some(0.4), Some(true), Some(false)), Some((0.9, "L")));
+        assert_eq!(summary(Some(0.9), Some(0.4), Some(false), Some(true)), Some((0.4, "R")));
+        assert_eq!(summary(Some(0.9), None, Some(true), Some(true)), Some((0.9, "L")));
+        assert_eq!(summary(Some(0.9), Some(0.4), None, None), None);
+        assert_eq!(summary(Some(0.9), Some(0.4), Some(false), Some(false)), None);
     }
 
     #[test]
