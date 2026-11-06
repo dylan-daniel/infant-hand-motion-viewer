@@ -1,7 +1,8 @@
 use std::cmp::Ordering;
 
 use dear_imgui_rs::{
-    Condition, Id, InputTextFlags, SortDirection, TableColumnFlags, TableColumnWidth, TableFlags, Ui, WindowFlags,
+    Condition, Id, InputTextFlags, SortDirection, TableColumnFlags, TableColumnWidth, TableFlags, TableOptions,
+    TableSizingPolicy, Ui, WindowFlags,
 };
 
 use crate::remote::ExplorerNode;
@@ -176,6 +177,36 @@ pub fn score_color(score: f32) -> [f32; 4] {
     [0.9 * (1.0 - t) + 0.25 * t, 0.25 * (1.0 - t) + 0.8 * t, 0.25, 1.0]
 }
 
+/// The Used cell text: the score and the hands it came from, or a dash.
+fn used_text(row: &TrialRow) -> String {
+    match row.used_summary() {
+        Some((value, hands)) => format!("{} ({hands})", format_quality_score(Some(value))),
+        None => "-".to_string(),
+    }
+}
+
+/// Per-column widths that fit the header (with room for its sort arrow) and every row's text.
+pub fn fit_widths(ui: &Ui, rows: &[TrialRow], hide_unused: bool) -> [f32; 5] {
+    let padding = ui.clone_style().cell_padding()[0] * 2.0 + 2.0;
+    let arrow = ui.current_font_size() + 4.0;
+    let text_width = |text: &str| ui.calc_text_size(text)[0];
+    let mut widths = SortColumn::ALL.map(|column| text_width(column.label()) + arrow);
+    for row in rows {
+        let (left, right) = row.shown_scores(hide_unused);
+        let cells = [
+            row.subject.clone(),
+            row.trial.clone(),
+            format_quality_score(left),
+            format_quality_score(right),
+            used_text(row),
+        ];
+        for (width, cell) in widths.iter_mut().zip(&cells) {
+            *width = width.max(text_width(cell));
+        }
+    }
+    widths.map(|width| width + padding)
+}
+
 /// Draws the Trial Scores window; returns the path of the trial clicked this frame.
 pub fn draw_trial_table_window(
     ui: &Ui,
@@ -230,17 +261,22 @@ pub fn draw_trial_table_window(
                     | TableFlags::SORTABLE
                     | TableFlags::SORT_MULTI
                     | TableFlags::NO_SAVED_SETTINGS;
-                let Some(_table) = ui.begin_table_with_flags("##trials", 5, flags) else {
+                let options = TableOptions::new()
+                    .flags(flags)
+                    .sizing_policy(TableSizingPolicy::FixedFit);
+                let Some(_table) = ui.begin_table_with_flags("##trials", 5, options) else {
                     continue;
                 };
-                for (column, stretch) in SortColumn::ALL.into_iter().zip([1.0, 2.0, 0.6, 0.6, 0.6]) {
-                    let default_sort = matches!(column, SortColumn::Subject | SortColumn::Trial);
-                    let flags = if default_sort {
+                // A resizable table measures its columns only in its first frames, which a freshly shown window skips,
+                // so start each column at the width of its widest text.
+                let widths = fit_widths(ui, &rows, hide_unused);
+                for (column, width) in SortColumn::ALL.into_iter().zip(widths) {
+                    let flags = if matches!(column, SortColumn::Subject | SortColumn::Trial) {
                         TableColumnFlags::DEFAULT_SORT
                     } else {
                         TableColumnFlags::NONE
                     };
-                    ui.table_setup_column(column.label(), flags, Some(TableColumnWidth::stretch(stretch)));
+                    ui.table_setup_column(column.label(), flags, Some(TableColumnWidth::fixed(width)));
                 }
                 ui.table_headers_row();
                 let keys: Vec<SortKey> = ui
@@ -287,10 +323,7 @@ pub fn draw_trial_table_window(
                     }
                     ui.table_next_column();
                     match row.used_summary() {
-                        Some((value, hands)) => ui.text_colored(
-                            score_color(value),
-                            format!("{} ({hands})", format_quality_score(Some(value))),
-                        ),
+                        Some((value, _)) => ui.text_colored(score_color(value), used_text(row)),
                         None => ui.text_disabled("-"),
                     }
                 }

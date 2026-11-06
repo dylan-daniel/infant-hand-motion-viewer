@@ -1,6 +1,6 @@
 use infant_hand_motion_viewer::remote::ExplorerNode;
 use infant_hand_motion_viewer::ui::{
-    ScoreHistogramState, TrialTableState, draw_score_histogram_window, draw_trial_table_window,
+    ScoreHistogramState, TrialRow, TrialTableState, draw_score_histogram_window, draw_trial_table_window, fit_widths,
 };
 
 /// ImGui allows one live context per process, so the tests here take turns.
@@ -85,4 +85,37 @@ fn the_score_histogram_window_draws_headlessly_for_every_metric() {
         }
     }
     assert_eq!(state.folder, None);
+}
+
+#[test]
+fn fitted_column_widths_cover_the_widest_text_in_each_column() {
+    let _turn = IMGUI.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut ctx = dear_imgui_rs::Context::create();
+    {
+        let io = ctx.io_mut();
+        io.set_display_size([800.0, 600.0]);
+        io.set_delta_time(1.0 / 60.0);
+    }
+    ctx.font_atlas().try_claim_legacy_renderer().unwrap().build();
+    let _ = ctx.set_ini_filename::<std::path::PathBuf>(None);
+    let row = |subject: &str, trial: &str| TrialRow {
+        path: String::new(),
+        subject: subject.into(),
+        trial: trial.into(),
+        left: Some(0.9),
+        right: Some(0.4),
+        left_used: Some(true),
+        right_used: Some(true),
+    };
+    let frame = ctx.try_begin_frame().unwrap();
+    let ui = frame.ui();
+    let short = fit_widths(ui, &[row("A", "T1")], false);
+    let long = fit_widths(
+        ui,
+        &[row("A", "T1"), row("LongSubjectName26", "T11_BabyView_Long")],
+        false,
+    );
+    assert!(long[0] > short[0] && long[1] > short[1]);
+    assert_eq!(long[2..], short[2..]);
+    assert!(short[4] >= ui.calc_text_size("0.40 (L+R)")[0], "{short:?}");
 }
