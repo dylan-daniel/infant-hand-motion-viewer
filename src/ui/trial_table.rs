@@ -267,8 +267,9 @@ pub fn draw_trial_table_window(
                 let Some(_table) = ui.begin_table_with_flags("##trials", 5, options) else {
                     continue;
                 };
-                // A resizable table measures its columns only in its first frames, which a freshly shown window skips,
-                // so start each column at the width of its widest text.
+                // Score columns are fixed at the width of their widest text so they never clip in a narrow pane. Subject
+                // and trial share what is left in proportion to their text, clipping when short of room. Explicit widths
+                // also avoid ImGui's own measuring, which a freshly shown window skips.
                 let widths = fit_widths(ui, &rows, hide_unused);
                 for (column, width) in SortColumn::ALL.into_iter().zip(widths) {
                     let flags = if matches!(column, SortColumn::Subject | SortColumn::Trial) {
@@ -276,7 +277,11 @@ pub fn draw_trial_table_window(
                     } else {
                         TableColumnFlags::NONE
                     };
-                    ui.table_setup_column(column.label(), flags, Some(TableColumnWidth::fixed(width)));
+                    let width = match column {
+                        SortColumn::Subject | SortColumn::Trial => TableColumnWidth::stretch(width),
+                        _ => TableColumnWidth::fixed(width),
+                    };
+                    ui.table_setup_column(column.label(), flags, Some(width));
                 }
                 ui.table_headers_row();
                 let keys: Vec<SortKey> = ui
@@ -310,6 +315,9 @@ pub fn draw_trial_table_window(
                         .build()
                     {
                         clicked = Some(row.path.clone());
+                    }
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text(format!("{} / {}", row.subject, row.trial));
                     }
                     ui.table_next_column();
                     ui.text(&row.trial);
