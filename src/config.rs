@@ -89,6 +89,8 @@ pub struct Config {
     pub show_flags: bool,
     #[serde(default)]
     pub show_trial_table: bool,
+    #[serde(default)]
+    pub show_score_histogram: bool,
     #[serde(default = "default_true")]
     pub show_grasp: bool,
     #[serde(default = "default_true")]
@@ -189,6 +191,7 @@ impl Default for Config {
             show_measures: false,
             show_flags: default_true(),
             show_trial_table: false,
+            show_score_histogram: false,
             show_grasp: default_true(),
             show_frame_view: default_true(),
             show_wilor_view: default_true(),

@@ -13,6 +13,7 @@ pub struct MenuState {
     pub show_measures: bool,
     pub show_flags: bool,
     pub show_trial_table: bool,
+    pub show_score_histogram: bool,
     pub show_grasp: bool,
     pub show_frame_view: bool,
     pub show_wilor_view: bool,
@@ -88,6 +89,7 @@ pub fn draw_menu_bar(ui: &Ui, mut state: MenuState) -> MenuResult {
             ui.checkbox("Hand Measures", &mut state.show_measures);
             ui.checkbox("Flags", &mut state.show_flags);
             ui.checkbox("Trial Scores", &mut state.show_trial_table);
+            ui.checkbox("Score Histogram", &mut state.show_score_histogram);
             ui.checkbox("Grasp", &mut state.show_grasp);
             ui.checkbox("Frame View", &mut state.show_frame_view);
             ui.checkbox("WiLoR View", &mut state.show_wilor_view);
