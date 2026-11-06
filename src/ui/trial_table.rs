@@ -226,6 +226,7 @@ pub fn draw_trial_table_window(
                 // Saved settings only store the sorted columns, so a restart would move them to the left.
                 let flags = TableFlags::ROW_BG
                     | TableFlags::BORDERS_INNER_V
+                    | TableFlags::RESIZABLE
                     | TableFlags::SORTABLE
                     | TableFlags::SORT_MULTI
                     | TableFlags::NO_SAVED_SETTINGS;
