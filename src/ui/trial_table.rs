@@ -223,8 +223,12 @@ pub fn draw_trial_table_window(
                 if !ui.collapsing_header(&header, dear_imgui_rs::TreeNodeFlags::DEFAULT_OPEN) {
                     continue;
                 }
-                let flags =
-                    TableFlags::ROW_BG | TableFlags::BORDERS_INNER_V | TableFlags::SORTABLE | TableFlags::SORT_MULTI;
+                // Saved settings only store the sorted columns, so a restart would move them to the left.
+                let flags = TableFlags::ROW_BG
+                    | TableFlags::BORDERS_INNER_V
+                    | TableFlags::SORTABLE
+                    | TableFlags::SORT_MULTI
+                    | TableFlags::NO_SAVED_SETTINGS;
                 let Some(_table) = ui.begin_table_with_flags("##trials", 5, flags) else {
                     continue;
                 };
