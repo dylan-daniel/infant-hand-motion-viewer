@@ -631,3 +631,68 @@ mod trial_table {
         assert_eq!(score_color(2.0), green);
     }
 }
+
+mod score_histogram {
+    use infant_hand_motion_viewer::ui::{ScoreMetric, TrialRow, histogram};
+
+    fn row(left: Option<f32>, right: Option<f32>, left_used: Option<bool>, right_used: Option<bool>) -> TrialRow {
+        TrialRow {
+            path: String::new(),
+            subject: "A".into(),
+            trial: "T1".into(),
+            left,
+            right,
+            left_used,
+            right_used,
+        }
+    }
+
+    #[test]
+    fn scores_fall_into_equal_buckets_and_one_lands_in_the_last() {
+        let rows = [
+            row(Some(0.0), None, Some(true), None),
+            row(Some(0.05), None, Some(true), None),
+            row(Some(0.1), None, Some(true), None),
+            row(Some(1.0), None, Some(true), None),
+            row(Some(0.99), None, Some(true), None),
+        ];
+        let hist = histogram(&rows, ScoreMetric::Left, false, 10);
+        assert_eq!(hist.counts, [2, 1, 0, 0, 0, 0, 0, 0, 0, 2]);
+        assert_eq!(hist.unscored, 0);
+    }
+
+    #[test]
+    fn missing_and_hidden_scores_are_counted_apart() {
+        let rows = [
+            row(Some(0.5), Some(0.5), Some(true), Some(false)),
+            row(None, Some(0.9), Some(true), Some(true)),
+        ];
+        let shown = histogram(&rows, ScoreMetric::Right, false, 2);
+        assert_eq!((shown.counts.clone(), shown.unscored), (vec![0, 2], 0));
+        let hidden = histogram(&rows, ScoreMetric::Right, true, 2);
+        assert_eq!((hidden.counts, hidden.unscored), (vec![0, 1], 1));
+    }
+
+    #[test]
+    fn the_used_metric_counts_the_worst_used_hand_and_skips_trials_without_one() {
+        let rows = [
+            row(Some(0.9), Some(0.1), Some(true), Some(true)),
+            row(Some(0.9), Some(0.1), Some(true), Some(false)),
+            row(Some(0.9), Some(0.1), None, None),
+        ];
+        let hist = histogram(&rows, ScoreMetric::Used, false, 10);
+        assert_eq!((hist.counts[1], hist.counts[9], hist.unscored), (1, 1, 1));
+        let mean = hist.mean.unwrap();
+        assert!((mean - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn out_of_range_scores_are_clamped_and_zero_buckets_are_safe() {
+        let rows = [
+            row(Some(1.7), None, Some(true), None),
+            row(Some(-0.3), None, Some(true), None),
+        ];
+        let hist = histogram(&rows, ScoreMetric::Left, false, 0);
+        assert_eq!(hist.counts, [2]);
+    }
+}
