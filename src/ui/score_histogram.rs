@@ -91,6 +91,20 @@ pub fn histogram<'a>(
     Histogram { counts, unscored, mean }
 }
 
+/// Lower and upper score of a bucket; every bucket is half-open except the last, which includes 1.
+pub fn bucket_range(index: usize, bins: usize) -> (f32, f32) {
+    let bins = bins.max(1) as f32;
+    (index as f32 / bins, (index + 1) as f32 / bins)
+}
+
+/// Tooltip text for a bucket: its score range and trial count.
+pub fn bucket_tooltip(index: usize, bins: usize, count: usize) -> String {
+    let (low, high) = bucket_range(index, bins);
+    let close = if index + 1 >= bins { ']' } else { ')' };
+    let noun = if count == 1 { "trial" } else { "trials" };
+    format!("{low:.2} - {high:.2}{close}\n{count} {noun}")
+}
+
 /// Draws the Score Histogram window.
 pub fn draw_score_histogram_window(
     ui: &Ui,
@@ -171,6 +185,8 @@ fn draw_bars(ui: &Ui, hist: &Histogram) {
     }
     let origin = ui.cursor_screen_pos();
     ui.dummy(avail);
+    let hovered_chart = ui.is_item_hovered();
+    let mouse = ui.io().mouse_pos();
     let plot_min = [origin[0] + left_pad, origin[1] + top_pad];
     let plot_max = [origin[0] + avail[0] - 8.0, origin[1] + avail[1] - bottom_pad];
     let draw_list = ui.get_window_draw_list();
@@ -189,22 +205,33 @@ fn draw_bars(ui: &Ui, hist: &Histogram) {
 
     let bins = hist.counts.len();
     let slot = (plot_max[0] - plot_min[0]) / bins as f32;
+    let hovered_bin =
+        (hovered_chart && mouse[0] >= plot_min[0] && mouse[0] < plot_max[0] && mouse[1] >= plot_min[1] - font)
+            .then(|| (((mouse[0] - plot_min[0]) / slot) as usize).min(bins - 1));
     for (index, &count) in hist.counts.iter().enumerate() {
         let x0 = plot_min[0] + slot * index as f32;
         let x1 = x0 + slot;
-        let top = plot_max[1] - height * count as f32 / max_count as f32;
-        let center = (index as f32 + 0.5) / bins as f32;
+        if hovered_bin == Some(index) {
+            draw_list
+                .add_rect(
+                    [x0, plot_min[1] - font],
+                    [x1, plot_max[1]],
+                    crate::ui::rgba(255, 255, 255, 28),
+                )
+                .filled(true)
+                .build();
+        }
         if count > 0 {
+            let top = plot_max[1] - height * count as f32 / max_count as f32;
+            let center = (index as f32 + 0.5) / bins as f32;
             draw_list
                 .add_rect([x0 + 1.0, top], [x1 - 1.0, plot_max[1]], score_color(center))
                 .filled(true)
                 .build();
-            let label = count.to_string();
-            let width = ui.calc_text_size(&label)[0];
-            if slot >= width + 2.0 {
-                draw_list.add_text([(x0 + x1 - width) * 0.5, top - font * 1.2], text_color, &label);
-            }
         }
+    }
+    if let Some(index) = hovered_bin {
+        ui.tooltip_text(bucket_tooltip(index, bins, hist.counts[index]));
     }
 
     let axis_y = plot_max[1] + 4.0;

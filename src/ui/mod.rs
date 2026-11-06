@@ -27,7 +27,9 @@ pub use image_view::{ImageViewResult, VideoNotice, draw_image_window};
 pub use measures::{MEASURE_TITLES, MeasuresView, draw_measures_window};
 pub use menu_bar::{MenuResult, MenuState, draw_menu_bar};
 pub use modals::{RootsTab, VideoRootsDialog, VideoRootsResult, draw_remote_modal, draw_video_roots_modal};
-pub use score_histogram::{Histogram, ScoreHistogramState, ScoreMetric, draw_score_histogram_window, histogram};
+pub use score_histogram::{
+    Histogram, ScoreHistogramState, ScoreMetric, bucket_range, bucket_tooltip, draw_score_histogram_window, histogram,
+};
 pub use transport::{
     FLAG_COLORS, FLAG_LAYERS, FLAG_NAMES, FlagLayer, PLAYBACK_SPEEDS, SliderGeometry, Transport, TransportState,
     draw_transport_bar, format_speed, next_playback_speed,

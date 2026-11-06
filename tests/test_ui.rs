@@ -633,7 +633,7 @@ mod trial_table {
 }
 
 mod score_histogram {
-    use infant_hand_motion_viewer::ui::{ScoreMetric, TrialRow, histogram};
+    use infant_hand_motion_viewer::ui::{ScoreMetric, TrialRow, bucket_range, bucket_tooltip, histogram};
 
     fn row(left: Option<f32>, right: Option<f32>, left_used: Option<bool>, right_used: Option<bool>) -> TrialRow {
         TrialRow {
@@ -684,6 +684,14 @@ mod score_histogram {
         assert_eq!((hist.counts[1], hist.counts[9], hist.unscored), (1, 1, 1));
         let mean = hist.mean.unwrap();
         assert!((mean - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_bucket_tooltip_gives_its_range_and_count() {
+        assert_eq!(bucket_range(3, 10), (0.3, 0.4));
+        assert_eq!(bucket_tooltip(3, 10, 12), "0.30 - 0.40)\n12 trials");
+        assert_eq!(bucket_tooltip(9, 10, 1), "0.90 - 1.00]\n1 trial");
+        assert_eq!(bucket_tooltip(0, 4, 0), "0.00 - 0.25)\n0 trials");
     }
 
     #[test]
