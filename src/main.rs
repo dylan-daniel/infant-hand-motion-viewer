@@ -1340,6 +1340,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             None,
         );
 
+        state.trial_table.hide_unused = state.settings.hide_unused_hands;
         let table_clicked = draw_trial_table_window(
             ui,
             "Trial Scores###Trial Scores",

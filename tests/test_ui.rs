@@ -498,7 +498,8 @@ mod trial_table {
             trial: trial.into(),
             left,
             right: None,
-            has_events: false,
+            left_used: None,
+            right_used: None,
         }
     }
 
@@ -531,7 +532,7 @@ mod trial_table {
     #[test]
     fn rows_without_keys_sort_by_subject_then_trial_naturally() {
         let mut rows = vec![row("B", "T1", None), row("A", "T10", None), row("A", "T2", None)];
-        sort_rows(&mut rows, &[]);
+        sort_rows(&mut rows, &[], false);
         let names: Vec<_> = rows.iter().map(|r| r.path.as_str()).collect();
         assert_eq!(names, ["A/T2", "A/T10", "B/T1"]);
     }
@@ -547,23 +548,77 @@ mod trial_table {
         sort_rows(
             &mut rows,
             &[key(SortColumn::Subject, false), key(SortColumn::Left, true)],
+            false,
         );
         let names: Vec<_> = rows.iter().map(|r| r.path.as_str()).collect();
         assert_eq!(names, ["A/T2", "A/T1", "B/T1", "B/T2"]);
     }
 
     #[test]
-    fn descending_reverses_a_key_and_unscored_hands_sort_lowest() {
+    fn descending_reverses_a_key_and_unscored_hands_sort_last() {
         let mut rows = vec![
             row("A", "T1", Some(0.2)),
             row("A", "T2", None),
             row("A", "T3", Some(0.9)),
         ];
-        sort_rows(&mut rows, &[key(SortColumn::Left, true)]);
+        sort_rows(&mut rows, &[key(SortColumn::Left, true)], false);
         let trials: Vec<_> = rows.iter().map(|r| r.trial.as_str()).collect();
         assert_eq!(trials, ["T3", "T1", "T2"]);
-        sort_rows(&mut rows, &[key(SortColumn::Left, false)]);
-        assert_eq!(rows[0].trial, "T2");
+        sort_rows(&mut rows, &[key(SortColumn::Left, false)], false);
+        assert_eq!(rows[2].trial, "T2");
+    }
+
+    fn used_row(left: Option<f32>, right: Option<f32>, left_used: Option<bool>, right_used: Option<bool>) -> TrialRow {
+        TrialRow {
+            left,
+            right,
+            left_used,
+            right_used,
+            ..row("A", "T1", None)
+        }
+    }
+
+    #[test]
+    fn the_used_score_is_the_worst_score_of_the_used_hands() {
+        let both = used_row(Some(0.9), Some(0.4), Some(true), Some(true));
+        assert_eq!(both.used_score(), Some(0.4));
+        let left_only = used_row(Some(0.9), Some(0.4), Some(true), Some(false));
+        assert_eq!(left_only.used_score(), Some(0.9));
+        let unflagged = used_row(Some(0.9), Some(0.4), None, None);
+        assert_eq!(unflagged.used_score(), Some(0.4));
+        let neither = used_row(Some(0.9), Some(0.4), Some(false), Some(false));
+        assert_eq!(neither.used_score(), None);
+    }
+
+    #[test]
+    fn hiding_unused_hands_hides_their_scores_only_when_flags_are_known() {
+        let left_only = used_row(Some(0.9), Some(0.4), Some(true), Some(false));
+        assert_eq!(left_only.shown_scores(true), (Some(0.9), None));
+        assert_eq!(left_only.shown_scores(false), (Some(0.9), Some(0.4)));
+        let unflagged = used_row(Some(0.9), Some(0.4), None, None);
+        assert_eq!(unflagged.shown_scores(true), (Some(0.9), Some(0.4)));
+    }
+
+    #[test]
+    fn hidden_scores_sort_last_in_both_directions() {
+        let mut rows = vec![
+            TrialRow {
+                trial: "T1".into(),
+                ..used_row(Some(0.1), None, Some(false), Some(true))
+            },
+            TrialRow {
+                trial: "T2".into(),
+                ..used_row(Some(0.5), None, Some(true), Some(true))
+            },
+            TrialRow {
+                trial: "T3".into(),
+                ..used_row(Some(0.8), None, Some(true), Some(true))
+            },
+        ];
+        for descending in [false, true] {
+            sort_rows(&mut rows, &[key(SortColumn::Left, descending)], true);
+            assert_eq!(rows[2].trial, "T1");
+        }
     }
 
     #[test]

@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+
 use dear_imgui_rs::{
     Condition, Id, InputTextFlags, SortDirection, TableColumnFlags, TableColumnWidth, TableFlags, Ui, WindowFlags,
 };
@@ -14,7 +16,34 @@ pub struct TrialRow {
     pub trial: String,
     pub left: Option<f32>,
     pub right: Option<f32>,
-    pub has_events: bool,
+    pub left_used: Option<bool>,
+    pub right_used: Option<bool>,
+}
+
+impl TrialRow {
+    /// `(left, right)` hands the grasp events mark as used; both when the trial has no used flags at all.
+    fn used_sides(&self) -> (bool, bool) {
+        if self.left_used.is_none() && self.right_used.is_none() {
+            (true, true)
+        } else {
+            (self.left_used == Some(true), self.right_used == Some(true))
+        }
+    }
+
+    /// The left and right scores as shown: an unused hand's score is hidden when `hide_unused` is set.
+    pub fn shown_scores(&self, hide_unused: bool) -> (Option<f32>, Option<f32>) {
+        let (left_used, right_used) = if hide_unused { self.used_sides() } else { (true, true) };
+        (self.left.filter(|_| left_used), self.right.filter(|_| right_used))
+    }
+
+    /// The worst score among the used hands; `None` when no used hand is scored.
+    pub fn used_score(&self) -> Option<f32> {
+        let (left, right) = self.shown_scores(true);
+        match (left, right) {
+            (Some(left), Some(right)) => Some(left.min(right)),
+            (left, right) => left.or(right),
+        }
+    }
 }
 
 /// The trials of one export folder.
@@ -30,11 +59,11 @@ pub enum SortColumn {
     Trial,
     Left,
     Right,
-    Events,
+    Used,
 }
 
 impl SortColumn {
-    pub const ALL: [Self; 5] = [Self::Subject, Self::Trial, Self::Left, Self::Right, Self::Events];
+    pub const ALL: [Self; 5] = [Self::Subject, Self::Trial, Self::Left, Self::Right, Self::Used];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -42,7 +71,7 @@ impl SortColumn {
             Self::Trial => "Trial",
             Self::Left => "Left",
             Self::Right => "Right",
-            Self::Events => "Events",
+            Self::Used => "Used",
         }
     }
 }
@@ -58,6 +87,8 @@ pub struct SortKey {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct TrialTableState {
     pub filter_text: String,
+    /// Hide the scores of hands the grasp events do not mark as used; mirrors the global setting each frame.
+    pub hide_unused: bool,
 }
 
 /// One table per export folder: every folder whose children are subject groups, in tree order.
@@ -80,7 +111,8 @@ fn collect(node: &ExplorerNode, tables: &mut Vec<FolderTable>) {
                 trial: trial.name.clone(),
                 left: trial.quality_score_left,
                 right: trial.quality_score_right,
-                has_events: trial.left_hand_used.is_some() || trial.right_hand_used.is_some(),
+                left_used: trial.left_hand_used,
+                right_used: trial.right_hand_used,
             });
         }
     }
@@ -95,25 +127,39 @@ fn collect(node: &ExplorerNode, tables: &mut Vec<FolderTable>) {
     }
 }
 
-/// Sorts rows by each key in priority order, then by subject and trial; unscored hands sort lowest.
-pub fn sort_rows(rows: &mut [TrialRow], keys: &[SortKey]) {
-    let score = |value: Option<f32>| value.unwrap_or(f32::NEG_INFINITY);
-    let compare = |a: &TrialRow, b: &TrialRow, column: SortColumn| match column {
-        SortColumn::Subject => natural_cmp(&a.subject, &b.subject),
-        SortColumn::Trial => natural_cmp(&a.trial, &b.trial),
-        SortColumn::Left => score(a.left).total_cmp(&score(b.left)),
-        SortColumn::Right => score(a.right).total_cmp(&score(b.right)),
-        SortColumn::Events => a.has_events.cmp(&b.has_events),
+/// Sorts rows by each key in priority order, then by subject and trial. Hidden or missing scores sort last in either
+/// direction.
+pub fn sort_rows(rows: &mut [TrialRow], keys: &[SortKey], hide_unused: bool) {
+    let by_score = |a: Option<f32>, b: Option<f32>, descending: bool| match (a, b) {
+        (Some(a), Some(b)) if descending => b.total_cmp(&a),
+        (Some(a), Some(b)) => a.total_cmp(&b),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    };
+    let compare = |a: &TrialRow, b: &TrialRow, key: SortKey| {
+        let text = |order: Ordering| if key.descending { order.reverse() } else { order };
+        let (a_left, a_right) = a.shown_scores(hide_unused);
+        let (b_left, b_right) = b.shown_scores(hide_unused);
+        match key.column {
+            SortColumn::Subject => text(natural_cmp(&a.subject, &b.subject)),
+            SortColumn::Trial => text(natural_cmp(&a.trial, &b.trial)),
+            SortColumn::Left => by_score(a_left, b_left, key.descending),
+            SortColumn::Right => by_score(a_right, b_right, key.descending),
+            SortColumn::Used => by_score(a.used_score(), b.used_score(), key.descending),
+        }
+    };
+    let ascending = |column| SortKey {
+        column,
+        descending: false,
     };
     rows.sort_by(|a, b| {
         keys.iter()
-            .map(|key| {
-                let order = compare(a, b, key.column);
-                if key.descending { order.reverse() } else { order }
-            })
-            .chain([compare(a, b, SortColumn::Subject), compare(a, b, SortColumn::Trial)])
+            .copied()
+            .chain([ascending(SortColumn::Subject), ascending(SortColumn::Trial)])
+            .map(|key| compare(a, b, key))
             .find(|order| order.is_ne())
-            .unwrap_or(std::cmp::Ordering::Equal)
+            .unwrap_or(Ordering::Equal)
     });
 }
 
@@ -139,6 +185,7 @@ pub fn draw_trial_table_window(
     if let Some(did) = dock_id {
         ui.set_next_window_dock_id_with_cond(did, Condition::FirstUseEver);
     }
+    let hide_unused = state.hide_unused;
     let mut clicked = None;
     dear_imgui_rs::Window::new(ui, title)
         .flags(WindowFlags::empty())
@@ -174,7 +221,7 @@ pub fn draw_trial_table_window(
                 let Some(_table) = ui.begin_table_with_flags("##trials", 5, flags) else {
                     continue;
                 };
-                for (column, stretch) in SortColumn::ALL.into_iter().zip([1.0, 2.0, 0.6, 0.6, 0.7]) {
+                for (column, stretch) in SortColumn::ALL.into_iter().zip([1.0, 2.0, 0.6, 0.6, 0.6]) {
                     let default_sort = matches!(column, SortColumn::Subject | SortColumn::Trial);
                     let flags = if default_sort {
                         TableColumnFlags::DEFAULT_SORT
@@ -203,7 +250,7 @@ pub fn draw_trial_table_window(
                             .collect()
                     })
                     .unwrap_or_default();
-                sort_rows(&mut rows, &keys);
+                sort_rows(&mut rows, &keys, hide_unused);
                 for row in &rows {
                     ui.table_next_row();
                     ui.table_next_column();
@@ -218,15 +265,14 @@ pub fn draw_trial_table_window(
                     }
                     ui.table_next_column();
                     ui.text(&row.trial);
-                    for score in [row.left, row.right] {
+                    let (left, right) = row.shown_scores(hide_unused);
+                    for score in [left, right, row.used_score()] {
                         ui.table_next_column();
                         match score {
                             Some(value) => ui.text_colored(score_color(value), format_quality_score(Some(value))),
                             None => ui.text_disabled("-"),
                         }
                     }
-                    ui.table_next_column();
-                    ui.text(if row.has_events { "yes" } else { "no" });
                 }
             }
             if !shown_any {
