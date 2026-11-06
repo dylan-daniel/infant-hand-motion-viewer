@@ -475,9 +475,7 @@ mod trial_filter {
 
 mod trial_table {
     use infant_hand_motion_viewer::remote::ExplorerNode;
-    use infant_hand_motion_viewer::ui::{
-        SortColumn, TrialRow, TrialTableState, collect_tables, score_color, sort_rows,
-    };
+    use infant_hand_motion_viewer::ui::{SortColumn, SortKey, TrialRow, collect_tables, score_color, sort_rows};
 
     fn node(name: &str, is_file: bool, children: Vec<ExplorerNode>, score: Option<f32>) -> ExplorerNode {
         ExplorerNode {
@@ -526,29 +524,46 @@ mod trial_table {
         assert_eq!(summary, [("A", 1), ("B", 2)]);
     }
 
+    fn key(column: SortColumn, descending: bool) -> SortKey {
+        SortKey { column, descending }
+    }
+
     #[test]
-    fn rows_sort_by_subject_then_trial_naturally() {
+    fn rows_without_keys_sort_by_subject_then_trial_naturally() {
         let mut rows = vec![row("B", "T1", None), row("A", "T10", None), row("A", "T2", None)];
-        sort_rows(&mut rows, &TrialTableState::default());
+        sort_rows(&mut rows, &[]);
         let names: Vec<_> = rows.iter().map(|r| r.path.as_str()).collect();
         assert_eq!(names, ["A/T2", "A/T10", "B/T1"]);
     }
 
     #[test]
-    fn clicking_a_column_sorts_then_flips_and_unscored_sort_last_when_descending_is_off_for_names() {
-        let mut state = TrialTableState::default();
-        state.click(SortColumn::Left);
-        assert_eq!((state.sort, state.descending), (SortColumn::Left, false));
-        state.click(SortColumn::Left);
-        assert!(state.descending);
+    fn earlier_keys_take_priority_over_later_ones() {
+        let mut rows = vec![
+            row("A", "T1", Some(0.2)),
+            row("B", "T1", Some(0.9)),
+            row("A", "T2", Some(0.9)),
+            row("B", "T2", None),
+        ];
+        sort_rows(
+            &mut rows,
+            &[key(SortColumn::Subject, false), key(SortColumn::Left, true)],
+        );
+        let names: Vec<_> = rows.iter().map(|r| r.path.as_str()).collect();
+        assert_eq!(names, ["A/T2", "A/T1", "B/T1", "B/T2"]);
+    }
+
+    #[test]
+    fn descending_reverses_a_key_and_unscored_hands_sort_lowest() {
         let mut rows = vec![
             row("A", "T1", Some(0.2)),
             row("A", "T2", None),
             row("A", "T3", Some(0.9)),
         ];
-        sort_rows(&mut rows, &state);
-        assert_eq!(rows[0].trial, "T3");
-        assert_eq!(rows[2].trial, "T2");
+        sort_rows(&mut rows, &[key(SortColumn::Left, true)]);
+        let trials: Vec<_> = rows.iter().map(|r| r.trial.as_str()).collect();
+        assert_eq!(trials, ["T3", "T1", "T2"]);
+        sort_rows(&mut rows, &[key(SortColumn::Left, false)]);
+        assert_eq!(rows[0].trial, "T2");
     }
 
     #[test]

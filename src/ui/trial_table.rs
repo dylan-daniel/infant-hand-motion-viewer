@@ -1,4 +1,6 @@
-use dear_imgui_rs::{Condition, Id, InputTextFlags, TableColumnFlags, TableFlags, Ui, WindowFlags};
+use dear_imgui_rs::{
+    Condition, Id, InputTextFlags, SortDirection, TableColumnFlags, TableColumnWidth, TableFlags, Ui, WindowFlags,
+};
 
 use crate::remote::ExplorerNode;
 use crate::ui::explorer::{format_quality_score, natural_cmp};
@@ -22,33 +24,40 @@ pub struct FolderTable {
     pub rows: Vec<TrialRow>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortColumn {
-    #[default]
-    Name,
+    Subject,
+    Trial,
     Left,
     Right,
     Events,
+}
+
+impl SortColumn {
+    pub const ALL: [Self; 5] = [Self::Subject, Self::Trial, Self::Left, Self::Right, Self::Events];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Subject => "Subject",
+            Self::Trial => "Trial",
+            Self::Left => "Left",
+            Self::Right => "Right",
+            Self::Events => "Events",
+        }
+    }
+}
+
+/// One level of a multi-column sort; earlier keys take priority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SortKey {
+    pub column: SortColumn,
+    pub descending: bool,
 }
 
 /// Table state kept between frames.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct TrialTableState {
     pub filter_text: String,
-    pub sort: SortColumn,
-    pub descending: bool,
-}
-
-impl TrialTableState {
-    /// Clicking the active column flips its direction; any other column becomes active, ascending.
-    pub fn click(&mut self, column: SortColumn) {
-        if self.sort == column {
-            self.descending = !self.descending;
-        } else {
-            self.sort = column;
-            self.descending = false;
-        }
-    }
 }
 
 /// One table per export folder: every folder whose children are subject groups, in tree order.
@@ -86,20 +95,25 @@ fn collect(node: &ExplorerNode, tables: &mut Vec<FolderTable>) {
     }
 }
 
-/// Sorts rows by the chosen column, falling back to subject then trial name; unscored hands sort last.
-pub fn sort_rows(rows: &mut [TrialRow], state: &TrialTableState) {
+/// Sorts rows by each key in priority order, then by subject and trial; unscored hands sort lowest.
+pub fn sort_rows(rows: &mut [TrialRow], keys: &[SortKey]) {
     let score = |value: Option<f32>| value.unwrap_or(f32::NEG_INFINITY);
-    let name =
-        |a: &TrialRow, b: &TrialRow| natural_cmp(&a.subject, &b.subject).then_with(|| natural_cmp(&a.trial, &b.trial));
+    let compare = |a: &TrialRow, b: &TrialRow, column: SortColumn| match column {
+        SortColumn::Subject => natural_cmp(&a.subject, &b.subject),
+        SortColumn::Trial => natural_cmp(&a.trial, &b.trial),
+        SortColumn::Left => score(a.left).total_cmp(&score(b.left)),
+        SortColumn::Right => score(a.right).total_cmp(&score(b.right)),
+        SortColumn::Events => a.has_events.cmp(&b.has_events),
+    };
     rows.sort_by(|a, b| {
-        let primary = match state.sort {
-            SortColumn::Name => name(a, b),
-            SortColumn::Left => score(a.left).total_cmp(&score(b.left)),
-            SortColumn::Right => score(a.right).total_cmp(&score(b.right)),
-            SortColumn::Events => a.has_events.cmp(&b.has_events),
-        };
-        let primary = if state.descending { primary.reverse() } else { primary };
-        primary.then_with(|| name(a, b))
+        keys.iter()
+            .map(|key| {
+                let order = compare(a, b, key.column);
+                if key.descending { order.reverse() } else { order }
+            })
+            .chain([compare(a, b, SortColumn::Subject), compare(a, b, SortColumn::Trial)])
+            .find(|order| order.is_ne())
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 }
 
@@ -150,50 +164,46 @@ pub fn draw_trial_table_window(
                     continue;
                 }
                 shown_any = true;
-                sort_rows(&mut rows, state);
                 let _id = ui.push_id(index as i32);
                 let header = format!("{} ({})###folder", table.name, rows.len());
                 if !ui.collapsing_header(&header, dear_imgui_rs::TreeNodeFlags::DEFAULT_OPEN) {
                     continue;
                 }
-                let flags = TableFlags::ROW_BG | TableFlags::BORDERS_INNER_V;
+                let flags =
+                    TableFlags::ROW_BG | TableFlags::BORDERS_INNER_V | TableFlags::SORTABLE | TableFlags::SORT_MULTI;
                 let Some(_table) = ui.begin_table_with_flags("##trials", 5, flags) else {
                     continue;
                 };
-                for (label, stretch) in [
-                    ("Subject", 1.0),
-                    ("Trial", 2.0),
-                    ("Left", 0.6),
-                    ("Right", 0.6),
-                    ("Events", 0.7),
-                ] {
-                    ui.table_setup_column(
-                        label,
-                        TableColumnFlags::NONE,
-                        Some(dear_imgui_rs::TableColumnWidth::stretch(stretch)),
-                    );
-                }
-                ui.table_next_row();
-                for (column, label, sort) in [
-                    (0, "Subject", SortColumn::Name),
-                    (1, "Trial", SortColumn::Name),
-                    (2, "Left", SortColumn::Left),
-                    (3, "Right", SortColumn::Right),
-                    (4, "Events", SortColumn::Events),
-                ] {
-                    ui.table_set_column_index(column);
-                    let arrow = match (
-                        state.sort == sort && (sort != SortColumn::Name || column == 0),
-                        state.descending,
-                    ) {
-                        (true, true) => " v",
-                        (true, false) => " ^",
-                        _ => "",
+                for (column, stretch) in SortColumn::ALL.into_iter().zip([1.0, 2.0, 0.6, 0.6, 0.7]) {
+                    let default_sort = matches!(column, SortColumn::Subject | SortColumn::Trial);
+                    let flags = if default_sort {
+                        TableColumnFlags::DEFAULT_SORT
+                    } else {
+                        TableColumnFlags::NONE
                     };
-                    if ui.selectable(format!("{label}{arrow}###h{column}")) {
-                        state.click(sort);
-                    }
+                    ui.table_setup_column(column.label(), flags, Some(TableColumnWidth::stretch(stretch)));
                 }
+                ui.table_headers_row();
+                let keys: Vec<SortKey> = ui
+                    .table_get_sort_specs()
+                    .map(|specs| {
+                        let mut specs: Vec<_> = specs.iter().copied().collect();
+                        specs.sort_by_key(|spec| spec.sort_order);
+                        specs
+                            .into_iter()
+                            .filter_map(|spec| {
+                                let column = *SortColumn::ALL.get(spec.column_index.get())?;
+                                let descending = match spec.sort_direction {
+                                    SortDirection::Descending => true,
+                                    SortDirection::Ascending => false,
+                                    SortDirection::None => return None,
+                                };
+                                Some(SortKey { column, descending })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                sort_rows(&mut rows, &keys);
                 for row in &rows {
                     ui.table_next_row();
                     ui.table_next_column();

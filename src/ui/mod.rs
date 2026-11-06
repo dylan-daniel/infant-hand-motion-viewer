@@ -32,7 +32,8 @@ pub use transport::{
 };
 pub use trial_filter::TrialFilter;
 pub use trial_table::{
-    FolderTable, SortColumn, TrialRow, TrialTableState, collect_tables, draw_trial_table_window, score_color, sort_rows,
+    FolderTable, SortColumn, SortKey, TrialRow, TrialTableState, collect_tables, draw_trial_table_window, score_color,
+    sort_rows,
 };
 pub use viewport::{ViewportResult, draw_viewport_window};
 
