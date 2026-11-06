@@ -148,6 +148,14 @@ impl FileExplorer {
         }
     }
 
+    pub fn selected(&self) -> &str {
+        &self.selected_path
+    }
+
+    pub fn root(&self) -> Option<&ExplorerNode> {
+        self.root_node.as_ref()
+    }
+
     /// Highlight the given file as the one currently open.
     pub fn set_selected(&mut self, path: &str) {
         self.selected_path = path.to_string();

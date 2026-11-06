@@ -472,3 +472,90 @@ mod trial_filter {
         assert_eq!(explorer.filter_text(), "LK26, !BF65");
     }
 }
+
+mod trial_table {
+    use infant_hand_motion_viewer::remote::ExplorerNode;
+    use infant_hand_motion_viewer::ui::{
+        SortColumn, TrialRow, TrialTableState, collect_tables, score_color, sort_rows,
+    };
+
+    fn node(name: &str, is_file: bool, children: Vec<ExplorerNode>, score: Option<f32>) -> ExplorerNode {
+        ExplorerNode {
+            name: name.into(),
+            path: name.into(),
+            is_file,
+            children,
+            default_open: false,
+            quality_score_left: score,
+            quality_score_right: None,
+            left_hand_used: None,
+            right_hand_used: None,
+        }
+    }
+
+    fn row(subject: &str, trial: &str, left: Option<f32>) -> TrialRow {
+        TrialRow {
+            path: format!("{subject}/{trial}"),
+            subject: subject.into(),
+            trial: trial.into(),
+            left,
+            right: None,
+            has_events: false,
+        }
+    }
+
+    #[test]
+    fn each_export_folder_gets_its_own_table() {
+        let trial = |n: &str| node(n, true, vec![], Some(0.5));
+        let tree = node(
+            "root",
+            false,
+            vec![
+                node("A", false, vec![node("S1", false, vec![trial("T1")], None)], None),
+                node(
+                    "B",
+                    false,
+                    vec![node("S1", false, vec![trial("T1"), trial("T2")], None)],
+                    None,
+                ),
+            ],
+            None,
+        );
+        let tables = collect_tables(&tree);
+        let summary: Vec<_> = tables.iter().map(|t| (t.name.as_str(), t.rows.len())).collect();
+        assert_eq!(summary, [("A", 1), ("B", 2)]);
+    }
+
+    #[test]
+    fn rows_sort_by_subject_then_trial_naturally() {
+        let mut rows = vec![row("B", "T1", None), row("A", "T10", None), row("A", "T2", None)];
+        sort_rows(&mut rows, &TrialTableState::default());
+        let names: Vec<_> = rows.iter().map(|r| r.path.as_str()).collect();
+        assert_eq!(names, ["A/T2", "A/T10", "B/T1"]);
+    }
+
+    #[test]
+    fn clicking_a_column_sorts_then_flips_and_unscored_sort_last_when_descending_is_off_for_names() {
+        let mut state = TrialTableState::default();
+        state.click(SortColumn::Left);
+        assert_eq!((state.sort, state.descending), (SortColumn::Left, false));
+        state.click(SortColumn::Left);
+        assert!(state.descending);
+        let mut rows = vec![
+            row("A", "T1", Some(0.2)),
+            row("A", "T2", None),
+            row("A", "T3", Some(0.9)),
+        ];
+        sort_rows(&mut rows, &state);
+        assert_eq!(rows[0].trial, "T3");
+        assert_eq!(rows[2].trial, "T2");
+    }
+
+    #[test]
+    fn score_color_runs_red_to_green() {
+        let red = score_color(0.0);
+        let green = score_color(1.0);
+        assert!(red[0] > red[1] && green[1] > green[0]);
+        assert_eq!(score_color(2.0), green);
+    }
+}
