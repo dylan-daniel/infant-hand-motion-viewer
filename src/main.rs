@@ -31,9 +31,9 @@ use infant_hand_motion_viewer::graphics::{
 };
 use infant_hand_motion_viewer::remote::{ConnectionState, RemoteClient, RemoteConfig, fetch_export};
 use infant_hand_motion_viewer::ui::{
-    FileExplorer, GraspPaneState, MeasuresView, MenuState, RootsTab, SourceMode, Transport, UiIcons, VideoNotice,
-    VideoRootsDialog, draw_flags_window, draw_grasp_window, draw_image_window, draw_measures_window, draw_menu_bar,
-    draw_remote_modal, draw_video_roots_modal, draw_viewport_window,
+    FileExplorer, GraspPaneState, MeasuresView, MenuState, RootsTab, SourceMode, Transport, TrialTableState, UiIcons,
+    VideoNotice, VideoRootsDialog, draw_flags_window, draw_grasp_window, draw_image_window, draw_measures_window,
+    draw_menu_bar, draw_remote_modal, draw_trial_table_window, draw_video_roots_modal, draw_viewport_window,
 };
 use infant_hand_motion_viewer::util::WorkerQueue;
 use infant_hand_motion_viewer::util::window_placement::{MonitorRect, is_position_reachable};
@@ -137,6 +137,7 @@ struct AppState {
     active_pane: i32, // 0 = Scene, 1 = Frame View
     restore_focus_frames: i32,
     explorer: FileExplorer,
+    trial_table: TrialTableState,
     show_remote_modal: bool,
     video_roots_dialog: VideoRootsDialog,
     /// (left, right) hidden in the scene and overlay as of the last prepared frame.
@@ -594,6 +595,7 @@ impl ApplicationHandler for AppRunner {
             active_pane: self.settings.active_pane,
             restore_focus_frames: 3,
             explorer,
+            trial_table: TrialTableState::default(),
             show_remote_modal: false,
             video_roots_dialog: VideoRootsDialog::default(),
             applied_hidden_hands: (false, false),
@@ -1155,6 +1157,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         hand_overlay: state.settings.show_hand_overlay,
         show_measures: state.settings.show_measures,
         show_flags: state.settings.show_flags,
+        show_trial_table: state.settings.show_trial_table,
         show_grasp: state.settings.show_grasp,
         show_frame_view: state.settings.show_frame_view,
         show_wilor_view: state.settings.show_wilor_view,
@@ -1337,10 +1340,25 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
             None,
         );
 
-        let explorer_result =
+        let table_clicked = draw_trial_table_window(
+            ui,
+            "Trial Scores###Trial Scores",
+            state.settings.show_trial_table,
+            state.explorer.root(),
+            state.explorer.selected(),
+            &mut state.trial_table,
+            None,
+        );
+
+        let mut explorer_result =
             state
                 .explorer
                 .draw_explorer_window(ui, &state.icons, state.settings.hide_unused_hands, None);
+
+        if let Some(path) = table_clicked {
+            explorer_result.open_file = Some(path);
+            explorer_result.is_remote = state.explorer.mode() == SourceMode::Remote;
+        }
 
         let roots_result = draw_video_roots_modal(
             ui,
@@ -1386,6 +1404,7 @@ fn render_app_frame(state: &mut AppState, event_loop: &ActiveEventLoop) {
         state.settings.show_measures = menu_result.state.show_measures;
     }
     state.settings.show_flags = menu_result.state.show_flags;
+    state.settings.show_trial_table = menu_result.state.show_trial_table;
     state.settings.show_grasp = menu_result.state.show_grasp;
     state.settings.show_frame_view = menu_result.state.show_frame_view;
     state.settings.show_wilor_view = menu_result.state.show_wilor_view;
